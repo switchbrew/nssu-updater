@@ -14,6 +14,13 @@ int main(int argc, char* argv[])
     AsyncResult asyncres={0};
     u32 state=0;
     bool tmpflag=0;
+    bool sleepflag=0;
+    Result sleeprc=0;
+
+    appletLockExit();
+
+    sleeprc = appletIsAutoSleepDisabled(&sleepflag);
+    if (R_SUCCEEDED(sleeprc)) sleeprc = appletSetAutoSleepDisabled(true);
 
     consoleInit(NULL);
 
@@ -155,5 +162,7 @@ int main(int argc, char* argv[])
 
     // Deinitialize and clean up resources used by the console (important!)
     consoleExit(NULL);
+    if (R_SUCCEEDED(sleeprc)) sleeprc = appletSetAutoSleepDisabled(sleepflag);
+    appletUnlockExit();
     return 0;
 }
