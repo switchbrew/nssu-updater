@@ -10,6 +10,8 @@
 // Include the main libnx system header, for Switch development
 #include <switch.h>
 
+// qlaunch handles Eula for sysupdates, however we won't.
+
 typedef enum {
     UpdateType_None    = -1,
     UpdateType_Card    =  0,
@@ -128,8 +130,14 @@ int main(int argc, char* argv[])
                         printf("nssuRequestSendSystemUpdate(): 0x%x\n", rc);
                     }
                     else if (R_SUCCEEDED(rc) && (kDown & KEY_Y)) {
-                        rc = nssuControlRequestReceiveSystemUpdate(&sucontrol, &asyncres, ipaddr, 55556, &deliveryinfo);
-                        printf("nssuControlRequestReceiveSystemUpdate(): 0x%x\n", rc);
+                        rc = nssuControlSetupToReceiveSystemUpdate(&sucontrol);
+                        printf("nssuControlSetupToReceiveSystemUpdate(): 0x%x\n", rc);
+
+                        if (R_SUCCEEDED(rc)) {
+                            rc = nssuControlRequestReceiveSystemUpdate(&sucontrol, &asyncres, ipaddr, 55556, &deliveryinfo);
+                            printf("nssuControlRequestReceiveSystemUpdate(): 0x%x\n", rc);
+                        }
+
                         updatetype=UpdateType_Receive;
                     }
                 }
