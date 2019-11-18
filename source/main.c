@@ -10,6 +10,13 @@
 // Include the main libnx system header, for Switch development
 #include <switch.h>
 
+typedef enum {
+    UpdateType_None    = -1,
+    UpdateType_Card    =  0,
+    UpdateType_Send    =  1,
+    UpdateType_Receive =  2,
+} UpdateType;
+
 // Main program entrypoint
 int main(int argc, char* argv[])
 {
@@ -20,7 +27,7 @@ int main(int argc, char* argv[])
     bool tmpflag=0;
     bool sleepflag=0;
     Result sleeprc=0;
-    u32 updatetype=0;
+    UpdateType updatetype=UpdateType_None;
     u32 ipaddr = ntohl(__nxlink_host.s_addr); // TODO: Should specifiying ipaddr via other means be supported?
 
     appletLockExit();
@@ -67,7 +74,7 @@ int main(int argc, char* argv[])
                 }
 
                 if (kDown & (KEY_A|KEY_B)) {
-                    updatetype = 0;
+                    updatetype = UpdateType_Card;
                     if (R_SUCCEEDED(rc)) {
                         if (kDown & KEY_A) {
                             rc = nssuControlSetupCardUpdate(&sucontrol, NULL, NSSU_CARDUPDATE_TMEM_SIZE_DEFAULT);
@@ -94,7 +101,7 @@ int main(int argc, char* argv[])
                     }
                 }
                 else if (kDown & (KEY_X|KEY_Y)) {
-                    updatetype=1;
+                    updatetype=UpdateType_Send;
 
                     NsSystemDeliveryInfo deliveryinfo={0};
                     rc = nsInitialize();
@@ -123,7 +130,7 @@ int main(int argc, char* argv[])
                     else if (R_SUCCEEDED(rc) && (kDown & KEY_Y)) {
                         rc = nssuControlRequestReceiveSystemUpdate(&sucontrol, &asyncres, ipaddr, 55556, &deliveryinfo);
                         printf("nssuControlRequestReceiveSystemUpdate(): 0x%x\n", rc);
-                        updatetype=2;
+                        updatetype=UpdateType_Receive;
                     }
                 }
 
@@ -131,11 +138,11 @@ int main(int argc, char* argv[])
             }
             else if(state==1 && R_SUCCEEDED(rc)) {
                 NsSystemUpdateProgress progress={0};
-                if (updatetype==0)
+                if (updatetype==UpdateType_Card)
                     rc = nssuControlGetPrepareCardUpdateProgress(&sucontrol, &progress);
-                else if (updatetype==1)
+                else if (updatetype==UpdateType_Send)
                     rc = nssuGetSendSystemUpdateProgress(&progress);
-                else if (updatetype==2)
+                else if (updatetype==UpdateType_Receive)
                     rc = nssuControlGetReceiveProgress(&sucontrol, &progress);
                 consoleClear();
                 float percent = 0.0f;
@@ -170,26 +177,39 @@ int main(int argc, char* argv[])
                     }
 
                     if (R_SUCCEEDED(rc2))  {
-                        // TODO: Support the other updatetypes.
-                        if (R_SUCCEEDED(rc) && updatetype==0) {
-                            rc = nssuControlHasPreparedCardUpdate(&sucontrol, &tmpflag);
-                            printf("nssuControlHasPreparedCardUpdate(): 0x%x, %d\n", rc, tmpflag);
+                        if (R_SUCCEEDED(rc) && updatetype!=UpdateType_Send) {
+                            if (updatetype==UpdateType_Card) {
+                                rc = nssuControlHasPreparedCardUpdate(&sucontrol, &tmpflag);
+                                printf("nssuControlHasPreparedCardUpdate(): 0x%x, %d\n", rc, tmpflag);
+                            }
+                            else if (updatetype==UpdateType_Receive) {
+                                rc = nssuControlHasReceived(&sucontrol, &tmpflag);
+                                printf("nssuControlHasReceived(): 0x%x, %d\n", rc, tmpflag);
+                            }
+
                             if (R_SUCCEEDED(rc) && !tmpflag) {
-                                printf("Update was not Prepared, aborting.\n");
+                                printf("Update is not ready, aborting.\n");
                                 rc = 1;
                             }
                             consoleUpdate(NULL);
                         }
 
-                        if (R_SUCCEEDED(rc) && updatetype==0) {
+                        if (R_SUCCEEDED(rc) && updatetype!=UpdateType_Send) {
                             printf("Applying update...\n");
                             consoleUpdate(NULL);
-                            rc = nssuControlApplyCardUpdate(&sucontrol);
-                            printf("nssuControlApplyCardUpdate(): 0x%x\n", rc);
+
+                            if (updatetype==UpdateType_Card) {
+                                rc = nssuControlApplyCardUpdate(&sucontrol);
+                                printf("nssuControlApplyCardUpdate(): 0x%x\n", rc);
+                            }
+                            else if (updatetype==UpdateType_Receive) {
+                                rc = nssuControlApplyReceivedUpdate(&sucontrol);
+                                printf("nssuControlApplyReceivedUpdate(): 0x%x\n", rc);
+                            }
                         }
 
                         if (R_SUCCEEDED(rc)) {
-                            printf("The update has finished. Press + to exit (and reboot).\n");
+                            printf("The update has finished. Press + to exit%s.\n", updatetype!=UpdateType_Send ? " and reboot" : "");
                             state=2;
                         }
                      }
@@ -208,7 +228,7 @@ int main(int argc, char* argv[])
     nssuControlClose(&sucontrol);
     nssuExit();
 
-    if (state==2 && updatetype==0) {
+    if (state==2 && updatetype!=UpdateType_Send) {
         printf("Rebooting...\n");
         consoleUpdate(NULL);
         rc = appletRequestToReboot();
