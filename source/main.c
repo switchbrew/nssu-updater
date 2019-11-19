@@ -13,10 +13,11 @@
 // qlaunch handles Eula for sysupdates, however we won't.
 
 typedef enum {
-    UpdateType_None    = -1,
-    UpdateType_Card    =  0,
-    UpdateType_Send    =  1,
-    UpdateType_Receive =  2,
+    UpdateType_None        = -1,
+    UpdateType_Download    =  0,
+    UpdateType_Card        =  1,
+    UpdateType_Send        =  2,
+    UpdateType_Receive     =  3,
 } UpdateType;
 
 // Main program entrypoint
@@ -40,6 +41,7 @@ int main(int argc, char* argv[])
     consoleInit(NULL);
 
     printf("nssu_updater\n");
+    printf("Press - to install update downloaded from CDN.\n");
     printf("Press A to install update with nssuControlSetupCardUpdate.\n");
     printf("Press B to install update with nssuControlSetupCardUpdateViaSystemUpdater.\n");
     if (ipaddr) {
@@ -69,13 +71,18 @@ int main(int argc, char* argv[])
             break; // break in order to return to hbmenu
 
         if (R_SUCCEEDED(rc)) {
-            if (state==0 && R_SUCCEEDED(rc) && ((kDown & (KEY_A|KEY_B)) || (ipaddr && (kDown & (KEY_X|KEY_Y))))) {
-                if (kDown & (KEY_A|KEY_B|KEY_Y)) {
+            if (state==0 && R_SUCCEEDED(rc) && ((kDown & (KEY_MINUS|KEY_A|KEY_B)) || (ipaddr && (kDown & (KEY_X|KEY_Y))))) {
+                if (kDown & (KEY_MINUS|KEY_A|KEY_B|KEY_Y)) {
                     rc = nssuOpenSystemUpdateControl(&sucontrol);
                     printf("nssuOpenSystemUpdateControl(): 0x%x\n", rc);
                 }
 
-                if (kDown & (KEY_A|KEY_B)) {
+                if (kDown & KEY_MINUS) {
+                    updatetype = UpdateType_Download;
+                    rc = nssuControlRequestDownloadLatestUpdate(&sucontrol, &asyncres);
+                    printf("nssuControlRequestDownloadLatestUpdate(): 0x%x\n", rc);
+                }
+                else if (kDown & (KEY_A|KEY_B)) {
                     updatetype = UpdateType_Card;
                     if (R_SUCCEEDED(rc)) {
                         if (kDown & KEY_A) {
@@ -146,7 +153,9 @@ int main(int argc, char* argv[])
             }
             else if(state==1 && R_SUCCEEDED(rc)) {
                 NsSystemUpdateProgress progress={0};
-                if (updatetype==UpdateType_Card)
+                if (updatetype==UpdateType_Download)
+                    rc = nssuControlGetDownloadProgress(&sucontrol, &progress);
+                else if (updatetype==UpdateType_Card)
                     rc = nssuControlGetPrepareCardUpdateProgress(&sucontrol, &progress);
                 else if (updatetype==UpdateType_Send)
                     rc = nssuGetSendSystemUpdateProgress(&progress);
@@ -156,7 +165,7 @@ int main(int argc, char* argv[])
                 float percent = 0.0f;
                 if (progress.total_size > 0) percent = (((float)progress.current_size) / ((float)progress.total_size)) * 100.0f;
                 if (percent > 100.0f) percent = 100.0f;
-                printf("Get*UpdateProgress(): 0x%x, 0x%lx of 0x%lx, %f%%\n", rc, progress.current_size, progress.total_size, percent);
+                printf("Get*Progress(): 0x%x, 0x%lx of 0x%lx, %f%%\n", rc, progress.current_size, progress.total_size, percent);
 
                 cnt++;
                 if (cnt>=60) {
@@ -186,7 +195,11 @@ int main(int argc, char* argv[])
 
                     if (R_SUCCEEDED(rc2))  {
                         if (R_SUCCEEDED(rc) && updatetype!=UpdateType_Send) {
-                            if (updatetype==UpdateType_Card) {
+                            if (updatetype==UpdateType_Download) {
+                                rc = nssuControlHasDownloaded(&sucontrol, &tmpflag);
+                                printf("nssuControlHasDownloaded(): 0x%x, %d\n", rc, tmpflag);
+                            }
+                            else if (updatetype==UpdateType_Card) {
                                 rc = nssuControlHasPreparedCardUpdate(&sucontrol, &tmpflag);
                                 printf("nssuControlHasPreparedCardUpdate(): 0x%x, %d\n", rc, tmpflag);
                             }
@@ -206,7 +219,11 @@ int main(int argc, char* argv[])
                             printf("Applying update...\n");
                             consoleUpdate(NULL);
 
-                            if (updatetype==UpdateType_Card) {
+                            if (updatetype==UpdateType_Download) {
+                                rc = nssuControlApplyDownloadedUpdate(&sucontrol);
+                                printf("nssuControlApplyDownloadedUpdate(): 0x%x\n", rc);
+                            }
+                            else if (updatetype==UpdateType_Card) {
                                 rc = nssuControlApplyCardUpdate(&sucontrol);
                                 printf("nssuControlApplyCardUpdate(): 0x%x\n", rc);
                             }
