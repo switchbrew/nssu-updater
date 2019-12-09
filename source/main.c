@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <errno.h>
 
 #include <sys/socket.h>
 #include <arpa/inet.h>
@@ -20,18 +21,152 @@ typedef enum {
     UpdateType_Receive     =  3,
 } UpdateType;
 
+Result sukeyLocate(u8 *out_key, NsSystemDeliveryInfo *delivery_info) {
+    Result rc=0;
+    Handle debughandle=0;
+    bool found=0;
+    u64 pid=0;
+    u64 pos=0;
+    u64 cur_addr=0, cur_module_size=0;
+    u8 *rosection_buf = NULL;
+    u64 rosection_size=0;
+    s32 total_out=0;
+    u32 pageinfo=0;
+    MemoryInfo meminfo={0};
+    LoaderModuleInfo module_infos[1]={0};
+    u8 calc_hash[SHA256_HASH_SIZE]={0};
+
+    if (!envIsSyscallHinted(0x60) || !envIsSyscallHinted(0x69) || !envIsSyscallHinted(0x6A)) {
+        printf("Debug SVCs aren't available, make sure you're running the latest hbloader release.\n");
+        rc = MAKERESULT(Module_Libnx, LibnxError_NotFound);
+    }
+
+    // Get the PID for ns.
+    if (R_SUCCEEDED(rc)) {
+        rc = pmdmntInitialize();
+        if (R_FAILED(rc)) printf("pmdmntInitialize(): 0x%x\n", rc);
+    }
+
+    if (R_SUCCEEDED(rc)) {
+        rc = pmdmntGetProcessId(&pid, 0x010000000000001F);
+        if (R_FAILED(rc)) printf("pmdmntGetProcessId(): 0x%x\n", rc);
+        pmdmntExit();
+    }
+
+    // Get the LoaderModuleInfo for ns.
+    if (R_SUCCEEDED(rc)) {
+        rc = ldrDmntInitialize();
+        if (R_FAILED(rc)) printf("ldrDmntInitialize(): 0x%x\n", rc);
+
+        if (R_SUCCEEDED(rc)) {
+            rc = ldrDmntGetProcessModuleInfo(pid, module_infos, 1, &total_out);
+            if (R_FAILED(rc)) printf("ldrDmntGetProcessModuleInfo(): 0x%x\n", rc);
+            if (R_SUCCEEDED(rc) && total_out!=1) {
+                printf("total_out from ldrDmntGetProcessModuleInfo() is invalid: %d.\n", total_out);
+                rc = MAKERESULT(Module_Libnx, LibnxError_BadInput);
+            }
+            ldrDmntExit();
+        }
+    }
+
+    // Locate the RO section and read it into rosection_buf.
+    if (R_SUCCEEDED(rc)) {
+        cur_addr = module_infos[0].base_address;
+        cur_module_size = module_infos[0].size;
+
+        rc = svcDebugActiveProcess(&debughandle, pid);
+        if (R_FAILED(rc)) printf("svcDebugActiveProcess(): 0x%x\n", rc);
+
+        if (R_SUCCEEDED(rc)) {
+            while (R_SUCCEEDED(rc) && cur_module_size>0) {
+                rc = svcQueryDebugProcessMemory(&meminfo, &pageinfo, debughandle, cur_addr);
+                if (R_FAILED(rc)) printf("svcQueryDebugProcessMemory(): 0x%x\n", rc);
+
+                if (R_SUCCEEDED(rc)) {
+                    if (meminfo.size > cur_module_size) break;
+                    if (meminfo.perm == Perm_R) {
+                        found = 1;
+                        break;
+                    }
+
+                    cur_addr+= meminfo.size;
+                    cur_module_size-= meminfo.size;
+                }
+            }
+
+            if (R_SUCCEEDED(rc) && !found) {
+                printf("Failed to find the R-- section in ns.\n");
+                rc = MAKERESULT(Module_Libnx, LibnxError_NotFound);
+            }
+
+            if (R_SUCCEEDED(rc)) {
+                rosection_size = meminfo.size;
+                rosection_buf = (u8*)malloc(rosection_size);
+                if (rosection_buf==NULL) {
+                    printf("Failed to allocate memory for rosection_buf.\n");
+                    rc = MAKERESULT(Module_Libnx, LibnxError_OutOfMemory);
+                }
+                else
+                    memset(rosection_buf, 0, rosection_size);
+            }
+
+            if (R_SUCCEEDED(rc)) {
+                rc = svcReadDebugProcessMemory(rosection_buf, debughandle, cur_addr, rosection_size);
+                if (R_FAILED(rc)) printf("svcReadDebugProcessMemory(): 0x%x\n", rc);
+            }
+
+            svcCloseHandle(debughandle);
+        }
+    }
+
+    // Locate the key in the RO section by looping through it and using it as the key.
+    if (R_SUCCEEDED(rc)) {
+        found = 0;
+        for (pos=0; pos<rosection_size-SHA256_HASH_SIZE; pos++) {
+            hmacSha256CalculateMac(calc_hash, &rosection_buf[pos], SHA256_HASH_SIZE, &delivery_info->data, sizeof(delivery_info->data));
+
+            if (memcmp(calc_hash, delivery_info->hmac, sizeof(calc_hash))==0) {
+                found = 1;
+                break;
+            }
+        }
+
+        if (!found) {
+            printf("Failed to find the hmac key.\n");
+            rc = MAKERESULT(Module_Libnx, LibnxError_NotFound);
+        }
+
+        if (R_SUCCEEDED(rc)) {
+            memcpy(out_key, &rosection_buf[pos], SHA256_HASH_SIZE);
+        }
+    }
+
+    if (rosection_buf) {
+        memset(rosection_buf, 0, rosection_size);
+        free(rosection_buf);
+    }
+
+    return rc;
+}
+
+void sukeySignSystemDeliveryInfo(const u8 *key, NsSystemDeliveryInfo *delivery_info) {
+    hmacSha256CalculateMac(delivery_info->hmac, key, SHA256_HASH_SIZE, &delivery_info->data, sizeof(delivery_info->data));
+}
+
 // Main program entrypoint
 int main(int argc, char* argv[])
 {
     Result rc=0;
     NsSystemUpdateControl sucontrol={0};
     AsyncResult asyncres={0};
+    u8 sysdeliveryinfo_key[SHA256_HASH_SIZE]={0};
     u32 state=0;
     bool tmpflag=0;
     bool sleepflag=0;
     Result sleeprc=0;
     UpdateType updatetype=UpdateType_None;
     u32 ipaddr = ntohl(__nxlink_host.s_addr); // TODO: Should specifiying ipaddr via other means be supported?
+    u32 system_version=0;                     // TODO: Same TODO as above.
 
     appletLockExit();
 
@@ -41,12 +176,27 @@ int main(int argc, char* argv[])
     consoleInit(NULL);
 
     printf("nssu_updater\n");
+
+    if (argc > 1) {
+        char *endarg = NULL;
+        char *optarg = argv[1];
+        if (optarg[0] == 'v') optarg++;
+
+        errno = 0;
+        system_version = strtoul(optarg, &endarg, 0);
+        if (endarg == optarg) errno = EINVAL;
+        if (errno != 0) {
+            system_version = 0;
+            printf("Invalid input arg for system-version.\n");
+        }
+    }
+
     printf("Press - to install update downloaded from CDN.\n");
     printf("Press A to install update with nssuControlSetupCardUpdate.\n");
     printf("Press B to install update with nssuControlSetupCardUpdateViaSystemUpdater.\n");
     if (ipaddr) {
         printf("Press X to Send the sysupdate.\n");
-        printf("Press Y to Receive the sysupdate.\n");
+        if (system_version) printf("Press Y to Receive the sysupdate.\n");
     }
     printf("Press + exit, aborting any operations prior to the final stage.\n");
 
@@ -71,7 +221,9 @@ int main(int argc, char* argv[])
             break; // break in order to return to hbmenu
 
         if (R_SUCCEEDED(rc)) {
-            if (state==0 && R_SUCCEEDED(rc) && ((kDown & (KEY_MINUS|KEY_A|KEY_B)) || (ipaddr && (kDown & (KEY_X|KEY_Y))))) {
+            if (state==0 && R_SUCCEEDED(rc) && ((kDown & (KEY_MINUS|KEY_A|KEY_B))
+                || (ipaddr && (kDown & KEY_X))
+                || (ipaddr && system_version && (kDown & KEY_Y)))) {
                 if (kDown & (KEY_MINUS|KEY_A|KEY_B|KEY_Y)) {
                     rc = nssuOpenSystemUpdateControl(&sucontrol);
                     printf("nssuOpenSystemUpdateControl(): 0x%x\n", rc);
@@ -124,12 +276,14 @@ int main(int argc, char* argv[])
                     }
 
                     if (R_SUCCEEDED(rc) && (kDown & KEY_Y)) {
-                        // TODO: Attempt to load/generate this from elsewhere first?
-                        FILE *f = fopen("nssu_updater_SystemDeliveryInfo.bin", "rb");
-                        if (f) {
-                            fread(&deliveryinfo, 1, sizeof(deliveryinfo), f);
-                            fclose(f);
+                        rc = sukeyLocate(sysdeliveryinfo_key, &deliveryinfo);
+                        printf("sukeyLocate(): 0x%x\n", rc);
+
+                        if (R_SUCCEEDED(rc)) {
+                            deliveryinfo.data.system_update_meta_version = system_version;
+                            sukeySignSystemDeliveryInfo(sysdeliveryinfo_key, &deliveryinfo);
                         }
+                        memset(sysdeliveryinfo_key, 0, sizeof(sysdeliveryinfo_key));
                     }
 
                     if (R_SUCCEEDED(rc) && (kDown & KEY_X)) {
