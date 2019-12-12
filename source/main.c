@@ -13,6 +13,8 @@
 // Include the main libnx system header, for Switch development
 #include <switch.h>
 
+#include <libconfig.h>
+
 // qlaunch handles Eula for sysupdates, however we won't.
 
 typedef enum {
@@ -155,6 +157,41 @@ void sukeySignSystemDeliveryInfo(const u8 *key, NsSystemDeliveryInfo *delivery_i
     hmacSha256CalculateMac(delivery_info->hmac, key, SHA256_HASH_SIZE, &delivery_info->data, sizeof(delivery_info->data));
 }
 
+bool configassocWrite(const char *config_path, const char *app_path, const char *extension) {
+    int ret=CONFIG_TRUE;
+    config_t cfg={0};
+    config_setting_t *setting = NULL;
+    config_setting_t *tmpsetting = NULL;
+
+    config_init(&cfg);
+
+    setting = config_root_setting(&cfg);
+    if (setting != NULL) {
+        setting = config_setting_add(setting, "fileassoc", CONFIG_TYPE_GROUP);
+        if (setting != NULL) {
+            tmpsetting = config_setting_add(setting, "app_path", CONFIG_TYPE_STRING);
+            if (tmpsetting) ret = config_setting_set_string(tmpsetting, app_path);
+
+            if (tmpsetting && ret==CONFIG_TRUE) {
+                tmpsetting = config_setting_add(setting, "targets", CONFIG_TYPE_LIST);
+                if (tmpsetting) {
+                    tmpsetting = config_setting_add(tmpsetting, NULL, CONFIG_TYPE_GROUP);
+                    if (tmpsetting) {
+                        tmpsetting = config_setting_add(tmpsetting, "file_extension", CONFIG_TYPE_STRING);
+                        if (tmpsetting) ret = config_setting_set_string(tmpsetting, extension);
+                    }
+                }
+            }
+        }
+    }
+    if (ret==CONFIG_TRUE && (setting == NULL || tmpsetting == NULL)) ret=CONFIG_FALSE;
+
+    if (ret==CONFIG_TRUE) ret = config_write_file(&cfg, config_path);
+    config_destroy(&cfg);
+
+    return ret==CONFIG_TRUE;
+}
+
 // Main program entrypoint
 int main(int argc, char* argv[])
 {
@@ -182,7 +219,8 @@ int main(int argc, char* argv[])
 
     memset(datadir, 0, sizeof(datadir));
 
-    // TODO: Write hbmenu extension-assoc config.
+    if (!configassocWrite("/config/nx-hbmenu/fileassoc/nssu-updater.cfg", "/switch/nssu_updater.nro", ".nssu-update")) // TODO: Update nro path.
+        printf("Failed to write the hbmenu config.\n");
 
     if (argc > 1) {
         char *endarg = NULL;
@@ -194,7 +232,7 @@ int main(int argc, char* argv[])
             if (optarg && optarg[0]=='/')optarg++;
             if (optarg == NULL) optarg = argv[1];
 
-            strncpy(datadir, argv[1], sizeof(datadir)-1); // argv[1] has to be a directory for this.
+            strncpy(datadir, argv[1], sizeof(datadir)-1); // TODO: hbmenu only supports files for assoc, update this to support argv[1] as a file.
 
             ipaddr = INADDR_LOOPBACK;
         }
