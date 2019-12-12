@@ -223,16 +223,28 @@ int main(int argc, char* argv[])
         printf("Failed to write the hbmenu config.\n");
 
     if (argc > 1) {
+        char *argptr = argv[1];
         char *endarg = NULL;
-        char *optarg = argv[1];
+        char *optarg = argptr;
         struct stat tmpstat;
 
         if(stat(optarg, &tmpstat)==0) {
-            optarg = strrchr(optarg, '/');
-            if (optarg && optarg[0]=='/')optarg++;
-            if (optarg == NULL) optarg = argv[1];
+            bool entrytype = (tmpstat.st_mode & S_IFMT) != S_IFREG;
+            size_t pathlen = strlen(argptr);
 
-            strncpy(datadir, argv[1], sizeof(datadir)-1); // TODO: hbmenu only supports files for assoc, update this to support argv[1] as a file.
+            optarg = strrchr(optarg, '/');
+            if (optarg && optarg[0]=='/') {
+                optarg++;
+
+                if (pathlen) pathlen--;
+                if (!entrytype) {
+                    while (pathlen && optarg[pathlen]!='/') pathlen--;
+                }
+            }
+            if (optarg == NULL) optarg = argptr;
+
+            if (pathlen > sizeof(datadir)-1) pathlen = sizeof(datadir)-1;
+            if (pathlen) strncpy(datadir, argptr, pathlen);
 
             ipaddr = INADDR_LOOPBACK;
         }
@@ -245,6 +257,10 @@ int main(int argc, char* argv[])
             system_version = 0;
             printf("Invalid input arg for system-version.\n");
         }
+        else
+            printf("Using system-version from arg: v%u\n", system_version);
+
+        if (datadir[0]) printf("Using datadir from arg: %s\n", datadir);
     }
 
     printf("Press - to install update downloaded from CDN.\n");
