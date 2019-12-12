@@ -1,0 +1,3 @@
+[submodule "contents-delivery-manager"]
+	path = contents-delivery-manager
+	url = ../contents-delivery-manager

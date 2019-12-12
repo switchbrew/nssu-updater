@@ -39,7 +39,7 @@ include $(DEVKITPRO)/libnx/switch_rules
 #---------------------------------------------------------------------------------
 TARGET		:=	$(notdir $(CURDIR))
 BUILD		:=	build
-SOURCES		:=	source
+SOURCES		:=	source contents-delivery-manager/common
 DATA		:=	data
 INCLUDES	:=	include
 #ROMFS	:=	romfs

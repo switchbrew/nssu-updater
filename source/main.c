@@ -4,6 +4,8 @@
 #include <string.h>
 #include <unistd.h>
 #include <errno.h>
+#include <sys/stat.h>
+#include <limits.h>
 
 #include <sys/socket.h>
 #include <arpa/inet.h>
@@ -167,6 +169,7 @@ int main(int argc, char* argv[])
     UpdateType updatetype=UpdateType_None;
     u32 ipaddr = ntohl(__nxlink_host.s_addr); // TODO: Should specifiying ipaddr via other means be supported?
     u32 system_version=0;                     // TODO: Same TODO as above.
+    char datadir[PATH_MAX];
 
     appletLockExit();
 
@@ -175,14 +178,29 @@ int main(int argc, char* argv[])
 
     consoleInit(NULL);
 
-    printf("nssu_updater\n");
+    printf("nssu-updater\n");
+
+    memset(datadir, 0, sizeof(datadir));
+
+    // TODO: Write hbmenu extension-assoc config.
 
     if (argc > 1) {
         char *endarg = NULL;
         char *optarg = argv[1];
-        if (optarg[0] == 'v') optarg++;
+        struct stat tmpstat;
+
+        if(stat(optarg, &tmpstat)==0) {
+            optarg = strrchr(optarg, '/');
+            if (optarg && optarg[0]=='/')optarg++;
+            if (optarg == NULL) optarg = argv[1];
+
+            strncpy(datadir, argv[1], sizeof(datadir)-1); // argv[1] has to be a directory for this.
+
+            ipaddr = INADDR_LOOPBACK;
+        }
 
         errno = 0;
+        if (optarg[0] == 'v') optarg++;
         system_version = strtoul(optarg, &endarg, 0);
         if (endarg == optarg) errno = EINVAL;
         if (errno != 0) {
@@ -203,9 +221,9 @@ int main(int argc, char* argv[])
     rc = nssuInitialize();
     printf("nssuInitialize(): 0x%x\n", rc);
 
-    if (ipaddr) printf("Using IP addr from nxlink: %s\n", inet_ntoa(__nxlink_host));
-
     u32 cnt=0;
+
+    // TODO: UI warning / user-confirmation.
 
     // Main loop
     while (appletMainLoop())
