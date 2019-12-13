@@ -143,7 +143,7 @@ Result managerSetup(DeliveryManager *manager, struct in_addr *nxaddr, u16 port, 
     if (R_FAILED(rc)) printf("deliveryManagerCreate() failed: 0x%x\n", rc);
     if (R_SUCCEEDED(rc)) {
         if (log_file) deliveryManagerSetLogFile(manager, log_file);
-        deliveryManagerSetHandlerGetMetaContentRecord(manager, managerHandlerMetaRecord, &manager);
+        deliveryManagerSetHandlerGetMetaContentRecord(manager, managerHandlerMetaRecord, manager);
         deliveryManagerSetHandlersGetContent(manager, transfer_state, managerContentTransferInit, managerContentTransferExit, managerContentTransfer);
 
         rc = ncmInitialize();
@@ -374,6 +374,7 @@ int main(int argc, char* argv[])
 
     sleeprc = appletIsAutoSleepDisabled(&sleepflag);
     if (R_SUCCEEDED(sleeprc)) sleeprc = appletSetAutoSleepDisabled(true);
+    socketInitializeDefault();
 
     consoleInit(NULL);
 
@@ -399,8 +400,7 @@ int main(int argc, char* argv[])
                 optarg++;
 
                 if (!entrytype) {
-                    if (pathlen) pathlen--;
-                    while (pathlen && optarg[pathlen]!='/') pathlen--;
+                    while (pathlen && argptr[pathlen]!='/') pathlen--;
                 }
             }
             if (optarg == NULL) optarg = argptr;
@@ -676,6 +676,7 @@ int main(int argc, char* argv[])
 
     // Deinitialize and clean up resources used by the console (important!)
     consoleExit(NULL);
+    socketExit();
     if (R_SUCCEEDED(sleeprc)) sleeprc = appletSetAutoSleepDisabled(sleepflag);
     appletUnlockExit();
     return 0;
