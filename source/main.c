@@ -427,6 +427,7 @@ int main(int argc, char* argv[])
 
     if (!sysver_flag) printf("The following are not available since [4.0.0+] is required: Send/Receive and nssuControlSetupCardUpdateViaSystemUpdater.\n");
 
+    // TODO: Disable unneeded buttons with fileassoc-arg.
     printf("Press - to install update downloaded from CDN.\n");
     printf("Press A to install update with nssuControlSetupCardUpdate.\n");
     if (sysver_flag) printf("Press B to install update with nssuControlSetupCardUpdateViaSystemUpdater.\n");
@@ -583,7 +584,15 @@ int main(int argc, char* argv[])
                 consoleUpdate(NULL);
 
                 if (R_SUCCEEDED(rc)) {
-                    Result rc2 = asyncResultWait(&asyncres, 0);
+                    Result rc2=0;
+
+                    if (updatetype==UpdateType_Receive && deliveryManagerCheckFinished(&manager)) {
+                        rc2 = deliveryManagerGetResult(&manager);
+                        deliveryManagerClose(&manager);
+                        if (R_FAILED(rc2)) printf("deliveryManagerGetResult(): 0x%x\n", rc2);
+                    }
+
+                    rc2 = asyncResultWait(&asyncres, 0);
                     if (R_SUCCEEDED(rc2)) {
                         printf("Operation finished.\n");
 
