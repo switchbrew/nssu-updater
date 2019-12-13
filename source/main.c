@@ -392,8 +392,8 @@ int main(int argc, char* argv[])
             if (optarg && optarg[0]=='/') {
                 optarg++;
 
-                if (pathlen) pathlen--;
                 if (!entrytype) {
+                    if (pathlen) pathlen--;
                     while (pathlen && optarg[pathlen]!='/') pathlen--;
                 }
             }
