@@ -347,20 +347,26 @@ bool configassocWrite(const char *config_path, const char *app_path, const char 
 int main(int argc, char* argv[])
 {
     Result rc=0;
+    Result sleeprc=0;
+
+    u32 state=0;
+    bool tmpflag=0;
+    bool sleepflag=0;
+    bool sysver_flag = hosversionAtLeast(4,0,0);
+    UpdateType updatetype=UpdateType_None;
+    u64 keymask=0;
+
     FILE *log_file = NULL;
     NsSystemUpdateControl sucontrol={0};
     AsyncResult asyncres={0};
     u8 sysdeliveryinfo_key[SHA256_HASH_SIZE]={0};
     DeliveryManager manager={0};
     struct ManagerContentTransferState transfer_state={0};
-    u32 state=0;
-    bool tmpflag=0;
-    bool sleepflag=0;
-    Result sleeprc=0;
-    UpdateType updatetype=UpdateType_None;
+
+    u16 port=55556;
     u32 ipaddr = ntohl(__nxlink_host.s_addr); // TODO: Should specifiying ipaddr via other means be supported?
     u32 system_version=0;                     // TODO: Same TODO as above.
-    u16 port=55556;
+
     char datadir[PATH_MAX];
     s32 depth=3;
 
@@ -419,17 +425,22 @@ int main(int argc, char* argv[])
         if (datadir[0]) printf("Using datadir from arg: %s\n", datadir);
     }
 
+    if (!sysver_flag) printf("The following are not available since [4.0.0+] is required: Send/Receive and nssuControlSetupCardUpdateViaSystemUpdater.\n");
+
     printf("Press - to install update downloaded from CDN.\n");
     printf("Press A to install update with nssuControlSetupCardUpdate.\n");
-    printf("Press B to install update with nssuControlSetupCardUpdateViaSystemUpdater.\n");
-    if (ipaddr) {
+    if (sysver_flag) printf("Press B to install update with nssuControlSetupCardUpdateViaSystemUpdater.\n");
+    else keymask |= KEY_B;
+    if (sysver_flag && ipaddr) {
         printf("Press X to Send the sysupdate.\n");
         if (system_version) printf("Press Y to Receive the sysupdate.\n");
+        else keymask |= KEY_Y;
     }
+    else keymask |= (KEY_X|KEY_Y);
     printf("Press + exit, aborting any operations prior to the final stage.\n");
 
     rc = nssuInitialize();
-    printf("nssuInitialize(): 0x%x\n", rc);
+    if (R_FAILED(rc)) printf("nssuInitialize(): 0x%x\n", rc);
 
     if (R_SUCCEEDED(rc)) { // TODO: Should this be used with more than just deliveryManager?
         log_file = fopen("nssu-updater.log", "w");
@@ -451,15 +462,13 @@ int main(int argc, char* argv[])
 
         // hidKeysDown returns information about which buttons have been
         // just pressed in this frame compared to the previous one
-        u64 kDown = hidKeysDown(CONTROLLER_P1_AUTO);
+        u64 kDown = hidKeysDown(CONTROLLER_P1_AUTO) & ~keymask;
 
         if (kDown & KEY_PLUS)
             break; // break in order to return to hbmenu
 
         if (R_SUCCEEDED(rc)) {
-            if (state==0 && R_SUCCEEDED(rc) && ((kDown & (KEY_MINUS|KEY_A|KEY_B))
-                || (ipaddr && (kDown & KEY_X))
-                || (ipaddr && system_version && (kDown & KEY_Y)))) {
+            if (state==0 && (kDown & (KEY_MINUS|KEY_A|KEY_B|KEY_X|KEY_Y))) {
                 if (kDown & (KEY_MINUS|KEY_A|KEY_B|KEY_Y)) {
                     rc = nssuOpenSystemUpdateControl(&sucontrol);
                     printf("nssuOpenSystemUpdateControl(): 0x%x\n", rc);
@@ -549,7 +558,7 @@ int main(int argc, char* argv[])
 
                 if (R_SUCCEEDED(rc)) state=1;
             }
-            else if(state==1 && R_SUCCEEDED(rc)) {
+            else if(state==1) {
                 NsSystemUpdateProgress progress={0};
                 if (updatetype==UpdateType_Download)
                     rc = nssuControlGetDownloadProgress(&sucontrol, &progress);
