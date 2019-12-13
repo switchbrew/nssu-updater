@@ -4,6 +4,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <errno.h>
+#include <dirent.h>
 #include <sys/stat.h>
 #include <limits.h>
 
@@ -15,6 +16,8 @@
 
 #include <libconfig.h>
 
+#include "delivery.h"
+
 // qlaunch handles Eula for sysupdates, however we won't.
 
 typedef enum {
@@ -24,6 +27,154 @@ typedef enum {
     UpdateType_Send        =  2,
     UpdateType_Receive     =  3,
 } UpdateType;
+
+struct ManagerContentTransferState {
+    FILE *f;
+};
+
+Result managerHandlerMetaLoad(void* userdata, struct DeliveryContentEntry *entry, const char* filepath, void** outbuf_ptr, size_t *out_filesize) {
+    Result rc=0, rc2=0;
+    NcmContentStorage *storage = (NcmContentStorage*)userdata;
+    NcmPlaceHolderId placeholder_id={0};
+    FsFileSystem tmpfs={0};
+    FILE *f = NULL;
+    u8 *tmpbuf = NULL;
+    char tmpstr[FS_MAX_PATH];
+
+    memset(tmpstr, 0, sizeof(tmpstr));
+
+    f = fopen(filepath, "rb");
+    if (f == NULL) rc = MAKERESULT(Module_Libnx, LibnxError_NotFound);
+
+    if (R_SUCCEEDED(rc)) {
+        tmpbuf = (u8*)malloc(entry->filesize);
+        if (tmpbuf) memset(tmpbuf, 0, entry->filesize);
+        else rc = MAKERESULT(Module_Libnx, LibnxError_OutOfMemory);
+    }
+
+    if (R_SUCCEEDED(rc)) {
+        if (fread(tmpbuf, 1, entry->filesize, f) != entry->filesize) rc = MAKERESULT(Module_Libnx, LibnxError_IoError);
+    }
+
+    if (R_SUCCEEDED(rc)) {
+        rc = ncmContentStorageGeneratePlaceHolderId(storage, &placeholder_id);
+        if (R_SUCCEEDED(rc)) rc = ncmContentStorageCreatePlaceHolder(storage, &entry->content_info.info.content_id, &placeholder_id, entry->filesize);
+        if (R_SUCCEEDED(rc)) {
+            rc = ncmContentStorageWritePlaceHolder(storage, &placeholder_id, 0, tmpbuf, entry->filesize);
+            if (R_SUCCEEDED(rc)) rc = ncmContentStorageGetPlaceHolderPath(storage, tmpstr, sizeof(tmpstr), &placeholder_id);
+
+            if (R_SUCCEEDED(rc)) rc = fsOpenFileSystemWithId(&tmpfs, 0, FsFileSystemType_ContentMeta, tmpstr);
+
+            if (R_SUCCEEDED(rc)) {
+                if (fsdevMountDevice("meta", tmpfs)==-1) rc = MAKERESULT(Module_Libnx, LibnxError_IoError);
+                if (R_SUCCEEDED(rc)) {
+                    rc = deliveryManagerLoadMetaFromFs("meta:/", outbuf_ptr, out_filesize, false);
+                    fsdevUnmountDevice("meta");
+                }
+            }
+            rc2 = ncmContentStorageDeletePlaceHolder(storage, &placeholder_id);
+            if (R_SUCCEEDED(rc)) rc = rc2;
+        }
+    }
+
+    if (tmpbuf) {
+        memset(tmpbuf, 0, entry->filesize);
+        free(tmpbuf);
+    }
+    if (f) fclose(f);
+
+    return rc;
+}
+
+Result managerHandlerMetaRecord(void* userdata, NcmPackagedContentInfo* record, const NcmContentMetaKey* content_meta_key) {
+    Result rc=0;
+    struct DeliveryContentEntry *entry = NULL;
+
+    rc = deliveryManagerGetContentEntry((DeliveryManager*)userdata, &entry, content_meta_key, NULL);
+    if (R_SUCCEEDED(rc)) memcpy(record, &entry->content_info, sizeof(NcmPackagedContentInfo));
+    return rc;
+}
+
+// These don't handle client-mode other than just returning 0.
+Result managerContentTransferInit(struct DeliveryGetContentDataTransferState* state, s64* content_size) {
+    Result rc=0;
+    struct ManagerContentTransferState *user_state = (struct ManagerContentTransferState*)state->userdata;
+    struct DeliveryContentEntry *entry = NULL;
+
+    if (state->manager->server) {
+        rc = deliveryManagerGetContentEntry(state->manager, &entry, NULL, &state->arg->content_id);
+        if (R_SUCCEEDED(rc)) {
+            user_state->f = fopen(entry->filepath, "rb");
+            if (user_state->f == NULL) rc = MAKERESULT(Module_Libnx, LibnxError_NotFound);
+        }
+        if (R_SUCCEEDED(rc)) *content_size = entry->filesize;
+    }
+
+    return rc;
+}
+
+void managerContentTransferExit(struct DeliveryGetContentDataTransferState* state) {
+    struct ManagerContentTransferState *user_state = (struct ManagerContentTransferState*)state->userdata;
+    if (user_state->f) {
+        fclose(user_state->f);
+        user_state->f = NULL;
+    }
+}
+
+Result managerContentTransfer(struct DeliveryGetContentDataTransferState* state, void* buffer, u64 size, s64 offset) {
+    Result rc=0;
+    struct ManagerContentTransferState *user_state = (struct ManagerContentTransferState*)state->userdata;
+
+    if (state->manager->server) {
+        if (fseek(user_state->f, offset, SEEK_SET)==-1) rc = MAKERESULT(Module_Libnx, LibnxError_IoError);
+        if (R_SUCCEEDED(rc)) {
+            if (fread(buffer, 1, size, user_state->f) != size) rc = MAKERESULT(Module_Libnx, LibnxError_IoError);
+        }
+    }
+
+    return rc;
+}
+
+Result managerSetup(DeliveryManager *manager, struct in_addr *nxaddr, u16 port, FILE *log_file, struct ManagerContentTransferState *transfer_state, const char *datadir, s32 depth) {
+    Result rc=0;
+    NcmContentStorage storage={0};
+
+    rc = deliveryManagerCreate(manager, true, nxaddr, port);
+    if (R_FAILED(rc)) printf("deliveryManagerCreate() failed: 0x%x\n", rc);
+    if (R_SUCCEEDED(rc)) {
+        if (log_file) deliveryManagerSetLogFile(manager, log_file);
+        deliveryManagerSetHandlerGetMetaContentRecord(manager, managerHandlerMetaRecord, &manager);
+        deliveryManagerSetHandlersGetContent(manager, transfer_state, managerContentTransferInit, managerContentTransferExit, managerContentTransfer);
+
+        rc = ncmInitialize();
+        if (R_FAILED(rc)) printf("ncmInitialize() failed: 0x%x\n", rc);
+
+        if (R_SUCCEEDED(rc)) {
+            rc = ncmOpenContentStorage(&storage, NcmStorageId_BuiltInSystem);
+            if (R_FAILED(rc)) printf("ncmOpenContentStorage failed: 0x%x\n", rc);
+        }
+
+        if (R_SUCCEEDED(rc)) {
+            printf("Scanning datadir...\n");
+            consoleUpdate(NULL);
+            rc = deliveryManagerScanDataDir(manager, datadir, depth, managerHandlerMetaLoad, &storage);
+            if (R_FAILED(rc)) printf("deliveryManagerScanDataDir() failed: 0x%x\n", rc);
+        }
+
+        ncmContentStorageClose(&storage);
+        ncmExit();
+
+        if (R_SUCCEEDED(rc)) {
+            rc = deliveryManagerRequestRun(manager);
+            if (R_FAILED(rc)) printf("deliveryManagerRequestRun() failed: 0x%x\n", rc);
+        }
+
+        if (R_SUCCEEDED(rc)) printf("Server started.\n");
+        consoleUpdate(NULL);
+    }
+
+    return rc;
+}
 
 Result sukeyLocate(u8 *out_key, NsSystemDeliveryInfo *delivery_info) {
     Result rc=0;
@@ -196,9 +347,12 @@ bool configassocWrite(const char *config_path, const char *app_path, const char 
 int main(int argc, char* argv[])
 {
     Result rc=0;
+    FILE *log_file = NULL;
     NsSystemUpdateControl sucontrol={0};
     AsyncResult asyncres={0};
     u8 sysdeliveryinfo_key[SHA256_HASH_SIZE]={0};
+    DeliveryManager manager={0};
+    struct ManagerContentTransferState transfer_state={0};
     u32 state=0;
     bool tmpflag=0;
     bool sleepflag=0;
@@ -206,7 +360,9 @@ int main(int argc, char* argv[])
     UpdateType updatetype=UpdateType_None;
     u32 ipaddr = ntohl(__nxlink_host.s_addr); // TODO: Should specifiying ipaddr via other means be supported?
     u32 system_version=0;                     // TODO: Same TODO as above.
+    u16 port=55556;
     char datadir[PATH_MAX];
+    s32 depth=3;
 
     appletLockExit();
 
@@ -274,6 +430,14 @@ int main(int argc, char* argv[])
 
     rc = nssuInitialize();
     printf("nssuInitialize(): 0x%x\n", rc);
+
+    if (R_SUCCEEDED(rc)) { // TODO: Should this be used with more than just deliveryManager?
+        log_file = fopen("nssu-updater.log", "w");
+        if (log_file==NULL) {
+            rc = MAKERESULT(Module_Libnx, LibnxError_IoError);
+            printf("Failed to open the log file.\n");
+        }
+    }
 
     u32 cnt=0;
 
@@ -359,15 +523,23 @@ int main(int argc, char* argv[])
                     }
 
                     if (R_SUCCEEDED(rc) && (kDown & KEY_X)) {
-                        rc = nssuRequestSendSystemUpdate(&asyncres, ipaddr, 55556, &deliveryinfo);
+                        rc = nssuRequestSendSystemUpdate(&asyncres, ipaddr, port, &deliveryinfo);
                         printf("nssuRequestSendSystemUpdate(): 0x%x\n", rc);
                     }
                     else if (R_SUCCEEDED(rc) && (kDown & KEY_Y)) {
-                        rc = nssuControlSetupToReceiveSystemUpdate(&sucontrol);
-                        printf("nssuControlSetupToReceiveSystemUpdate(): 0x%x\n", rc);
+                        if (datadir[0]) {
+                            struct in_addr nxaddr = {.s_addr = htonl(INADDR_LOOPBACK)};
+                            rc = managerSetup(&manager, &nxaddr, port, log_file, &transfer_state, datadir, depth);
+                            printf("managerSetup(): 0x%x\n", rc);
+                        }
 
                         if (R_SUCCEEDED(rc)) {
-                            rc = nssuControlRequestReceiveSystemUpdate(&sucontrol, &asyncres, ipaddr, 55556, &deliveryinfo);
+                            rc = nssuControlSetupToReceiveSystemUpdate(&sucontrol);
+                            printf("nssuControlSetupToReceiveSystemUpdate(): 0x%x\n", rc);
+                        }
+
+                        if (R_SUCCEEDED(rc)) {
+                            rc = nssuControlRequestReceiveSystemUpdate(&sucontrol, &asyncres, ipaddr, port, &deliveryinfo);
                             printf("nssuControlRequestReceiveSystemUpdate(): 0x%x\n", rc);
                         }
 
@@ -478,6 +650,12 @@ int main(int argc, char* argv[])
 
     nssuControlClose(&sucontrol);
     nssuExit();
+
+    printf("deliveryManagerClose()...\n");
+    consoleUpdate(NULL);
+    deliveryManagerClose(&manager);
+
+    if (log_file) fclose(log_file);
 
     if (state==2 && updatetype!=UpdateType_Send) {
         printf("Rebooting...\n");

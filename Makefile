@@ -41,7 +41,7 @@ TARGET		:=	$(notdir $(CURDIR))
 BUILD		:=	build
 SOURCES		:=	source contents-delivery-manager/common
 DATA		:=	data
-INCLUDES	:=	include
+INCLUDES	:=	include contents-delivery-manager/common
 #ROMFS	:=	romfs
 
 #---------------------------------------------------------------------------------
