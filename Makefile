@@ -44,6 +44,8 @@ DATA		:=	data
 INCLUDES	:=	include contents-delivery-manager/common
 #ROMFS	:=	romfs
 
+APP_AUTHOR	:=	switchbrew
+
 APP_VERSION	:=	1.0.0
 
 ifeq ($(RELEASE),)
