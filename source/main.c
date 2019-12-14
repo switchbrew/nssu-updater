@@ -21,12 +21,20 @@
 // qlaunch handles Eula for sysupdates, however we won't.
 
 typedef enum {
-    UpdateType_None        = -1,
-    UpdateType_Download    =  0,
-    UpdateType_Card        =  1,
-    UpdateType_Send        =  2,
-    UpdateType_Receive     =  3,
+    UpdateType_None,
+    UpdateType_Download,
+    UpdateType_Card,
+    UpdateType_CardViaSystemUpdater,
+    UpdateType_Send,
+    UpdateType_Receive,
 } UpdateType;
+
+typedef enum {
+    UpdateState_Initial,
+    UpdateState_Confirm,
+    UpdateState_InProgress,
+    UpdateState_Done,
+} UpdateState;
 
 struct ManagerContentTransferState {
     FILE *f;
@@ -349,12 +357,12 @@ int main(int argc, char* argv[])
     Result rc=0;
     Result sleeprc=0;
 
-    u32 state=0;
+    UpdateState state=UpdateState_Initial;
     bool tmpflag=0;
     bool sleepflag=0;
     bool sysver_flag = hosversionAtLeast(4,0,0);
     UpdateType updatetype=UpdateType_None;
-    u64 keymask=0;
+    u64 keymask=0, keymask_allbuttons=(KEY_MINUS|KEY_A|KEY_B|KEY_X|KEY_Y);
 
     FILE *log_file = NULL;
     NsSystemUpdateControl sucontrol={0};
@@ -430,7 +438,7 @@ int main(int argc, char* argv[])
 
     if (!sysver_flag) printf("The following are not available since [4.0.0+] is required: Send/Receive and nssuControlSetupCardUpdateViaSystemUpdater.\n");
 
-    if (!manager_enabled) {
+    if (!system_version) {
         printf("Press - to install update downloaded from CDN.\n");
         printf("Press A to install update with nssuControlSetupCardUpdate.\n");
         if (sysver_flag) printf("Press B to install update with nssuControlSetupCardUpdateViaSystemUpdater.\n");
@@ -445,7 +453,7 @@ int main(int argc, char* argv[])
         // TODO: Server-mode, where this just runs deliveryManager with connections accepted from the network.
     }
     else keymask |= (KEY_X|KEY_Y);
-    printf("Press + exit, aborting any operations prior to the final stage.\n");
+    printf("Press + exit, aborting the operation prior to applying the update.\n");
 
     rc = nssuInitialize();
     if (R_FAILED(rc)) printf("nssuInitialize(): 0x%x\n", rc);
@@ -460,8 +468,6 @@ int main(int argc, char* argv[])
 
     u32 cnt=0;
 
-    // TODO: UI warning / user-confirmation.
-
     // Main loop
     while (appletMainLoop())
     {
@@ -471,104 +477,143 @@ int main(int argc, char* argv[])
         // hidKeysDown returns information about which buttons have been
         // just pressed in this frame compared to the previous one
         u64 kDown = hidKeysDown(CONTROLLER_P1_AUTO) & ~keymask;
+        u64 kHeld = hidKeysHeld(CONTROLLER_P1_AUTO);
 
         if (kDown & KEY_PLUS)
             break; // break in order to return to hbmenu
 
         if (R_SUCCEEDED(rc)) {
-            if (state==0 && (kDown & (KEY_MINUS|KEY_A|KEY_B|KEY_X|KEY_Y))) {
-                if (kDown & (KEY_MINUS|KEY_A|KEY_B|KEY_Y)) {
+            if (state==UpdateState_Initial && (kDown & keymask_allbuttons)) {
+                char *updatedesc = "";
+                char tmpstr[256];
+                if (kDown & KEY_MINUS) {
+                    updatetype = UpdateType_Download;
+                    updatedesc = "CDN, roughly equivalent to installing the latest sysupdate with System Settings";
+                }
+                else if (kDown & KEY_A) {
+                    updatetype = UpdateType_Card;
+                    updatedesc = "Gamecard";
+                }
+                else if (kDown & KEY_B) {
+                    updatetype = UpdateType_CardViaSystemUpdater;
+                    updatedesc = "CardViaSystemUpdater";
+                }
+                else if (kDown & KEY_X) {
+                    updatetype = UpdateType_Send;
+                    updatedesc = "Send";
+                }
+                else if (kDown & KEY_Y) {
+                    updatetype = UpdateType_Receive;
+                    memset(tmpstr, 0, sizeof(tmpstr));
+                    snprintf(tmpstr, sizeof(tmpstr)-1, "Receive, %s", manager_enabled ? "sysupdate will be installed with the above local datadir + version" : "sysupdate will be installed with the above remote IP addr + version");
+                    updatedesc = tmpstr;
+                }
+
+                if ((updatetype == UpdateType_Receive && !manager_enabled) || updatetype == UpdateType_Send) {
+                    struct in_addr tmpaddr = {.s_addr = htonl(ipaddr)};
+                    printf("Using remote IP address: %s\n", inet_ntoa(tmpaddr));
+                }
+
+                printf(    CONSOLE_ESC(31;1m) /* Set color to red */
+                "You selected update-type:\n%s.\n"
+                "%s"
+                "Do not continue if the console is low on battery,\nunless the console is charging.\n"
+                "Are you sure you want to continue?\nPress the following buttons at the same time to confirm:\nA, B, X, Y, DPad-Up.\n"
+                "If you want to exit instead, press the + button.\n"
+                CONSOLE_ESC(0m) /* revert attributes*/
+                , updatedesc, updatetype!=UpdateType_Send ? "Backup your nandimage if you haven't already done so prior to running this.\nBricking may occur if the input sysupdate is corrupted.\n" : "");
+
+                state = UpdateState_Confirm;
+            }
+            else if (state==UpdateState_Confirm && (kHeld == (KEY_A|KEY_B|KEY_X|KEY_Y|KEY_DUP))) {
+                if (updatetype==UpdateType_Download || updatetype==UpdateType_Card || updatetype==UpdateType_CardViaSystemUpdater || updatetype==UpdateType_Receive) {
                     rc = nssuOpenSystemUpdateControl(&sucontrol);
                     printf("nssuOpenSystemUpdateControl(): 0x%x\n", rc);
                 }
 
-                if (kDown & KEY_MINUS) {
-                    updatetype = UpdateType_Download;
-                    rc = nssuControlRequestDownloadLatestUpdate(&sucontrol, &asyncres);
-                    printf("nssuControlRequestDownloadLatestUpdate(): 0x%x\n", rc);
-                }
-                else if (kDown & (KEY_A|KEY_B)) {
-                    updatetype = UpdateType_Card;
-                    if (R_SUCCEEDED(rc)) {
-                        if (kDown & KEY_A) {
-                            rc = nssuControlSetupCardUpdate(&sucontrol, NULL, NSSU_CARDUPDATE_TMEM_SIZE_DEFAULT);
-                            printf("nssuControlSetupCardUpdate(): 0x%x\n", rc);
-                        }
-                        else if (kDown & KEY_B) {
-                            rc = nssuControlSetupCardUpdateViaSystemUpdater(&sucontrol, NULL, NSSU_CARDUPDATE_TMEM_SIZE_DEFAULT);
-                            printf("nssuControlSetupCardUpdateViaSystemUpdater(): 0x%x\n", rc);
-                        }
+                if (R_SUCCEEDED(rc)) {
+                    if (updatetype==UpdateType_Download) {
+                        rc = nssuControlRequestDownloadLatestUpdate(&sucontrol, &asyncres);
+                        printf("nssuControlRequestDownloadLatestUpdate(): 0x%x\n", rc);
                     }
-
-                    if (R_SUCCEEDED(rc)) {
-                        rc = nssuControlHasPreparedCardUpdate(&sucontrol, &tmpflag);
-                        printf("nssuControlHasPreparedCardUpdate(): 0x%x, %d\n", rc, tmpflag);
-                        if (R_SUCCEEDED(rc) && tmpflag) {
-                            printf("Update was already Prepared, aborting.\n");
-                            rc = 1;
-                        }
-                    }
-
-                    if (R_SUCCEEDED(rc)) {
-                        rc = nssuControlRequestPrepareCardUpdate(&sucontrol, &asyncres);
-                        printf("nssuControlRequestPrepareCardUpdate(): 0x%x\n", rc);
-                    }
-                }
-                else if (kDown & (KEY_X|KEY_Y)) {
-                    updatetype=UpdateType_Send;
-
-                    NsSystemDeliveryInfo deliveryinfo={0};
-                    rc = nsInitialize();
-                    if (R_FAILED(rc)) printf("nsInitialize(): 0x%x\n", rc);
-
-                    if (R_SUCCEEDED(rc)) {
-                        rc = nsGetSystemDeliveryInfo(&deliveryinfo);
-                        printf("nsGetSystemDeliveryInfo(): 0x%x\n", rc);
-
-                        nsExit();
-                    }
-
-                    if (R_SUCCEEDED(rc) && (kDown & KEY_Y)) {
-                        rc = sukeyLocate(sysdeliveryinfo_key, &deliveryinfo);
-                        printf("sukeyLocate(): 0x%x\n", rc);
-
+                    else if (updatetype==UpdateType_Card || updatetype==UpdateType_CardViaSystemUpdater) {
                         if (R_SUCCEEDED(rc)) {
-                            deliveryinfo.data.system_update_meta_version = system_version;
-                            sukeySignSystemDeliveryInfo(sysdeliveryinfo_key, &deliveryinfo);
-                        }
-                        memset(sysdeliveryinfo_key, 0, sizeof(sysdeliveryinfo_key));
-                    }
-
-                    if (R_SUCCEEDED(rc) && (kDown & KEY_X)) {
-                        rc = nssuRequestSendSystemUpdate(&asyncres, ipaddr, port, &deliveryinfo);
-                        printf("nssuRequestSendSystemUpdate(): 0x%x\n", rc);
-                    }
-                    else if (R_SUCCEEDED(rc) && (kDown & KEY_Y)) {
-                        if (manager_enabled) {
-                            struct in_addr nxaddr = {.s_addr = htonl(INADDR_LOOPBACK)};
-                            rc = managerSetup(&manager, &nxaddr, port, log_file, &transfer_state, datadir, depth);
-                            printf("managerSetup(): 0x%x\n", rc);
-
-                            manager_setup = true;
+                            if (updatetype==UpdateType_Card) {
+                                rc = nssuControlSetupCardUpdate(&sucontrol, NULL, NSSU_CARDUPDATE_TMEM_SIZE_DEFAULT);
+                                printf("nssuControlSetupCardUpdate(): 0x%x\n", rc);
+                            }
+                            else if (updatetype==UpdateType_CardViaSystemUpdater) {
+                                rc = nssuControlSetupCardUpdateViaSystemUpdater(&sucontrol, NULL, NSSU_CARDUPDATE_TMEM_SIZE_DEFAULT);
+                                printf("nssuControlSetupCardUpdateViaSystemUpdater(): 0x%x\n", rc);
+                            }
                         }
 
                         if (R_SUCCEEDED(rc)) {
-                            rc = nssuControlSetupToReceiveSystemUpdate(&sucontrol);
-                            printf("nssuControlSetupToReceiveSystemUpdate(): 0x%x\n", rc);
+                            rc = nssuControlHasPreparedCardUpdate(&sucontrol, &tmpflag);
+                            printf("nssuControlHasPreparedCardUpdate(): 0x%x, %d\n", rc, tmpflag);
+                            if (R_SUCCEEDED(rc) && tmpflag) {
+                                printf("Update was already Prepared, aborting.\n");
+                                rc = 1;
+                            }
                         }
 
                         if (R_SUCCEEDED(rc)) {
-                            rc = nssuControlRequestReceiveSystemUpdate(&sucontrol, &asyncres, ipaddr, port, &deliveryinfo);
-                            printf("nssuControlRequestReceiveSystemUpdate(): 0x%x\n", rc);
+                            rc = nssuControlRequestPrepareCardUpdate(&sucontrol, &asyncres);
+                            printf("nssuControlRequestPrepareCardUpdate(): 0x%x\n", rc);
+                        }
+                    }
+                    else if (updatetype==UpdateType_Send || updatetype==UpdateType_Receive) {
+                        NsSystemDeliveryInfo deliveryinfo={0};
+                        rc = nsInitialize();
+                        if (R_FAILED(rc)) printf("nsInitialize(): 0x%x\n", rc);
+
+                        if (R_SUCCEEDED(rc)) {
+                            rc = nsGetSystemDeliveryInfo(&deliveryinfo);
+                            printf("nsGetSystemDeliveryInfo(): 0x%x\n", rc);
+
+                            nsExit();
                         }
 
-                        updatetype=UpdateType_Receive;
+                        if (R_SUCCEEDED(rc) && updatetype==UpdateType_Receive) {
+                            rc = sukeyLocate(sysdeliveryinfo_key, &deliveryinfo);
+                            printf("sukeyLocate(): 0x%x\n", rc);
+
+                            if (R_SUCCEEDED(rc)) {
+                                deliveryinfo.data.system_update_meta_version = system_version;
+                                sukeySignSystemDeliveryInfo(sysdeliveryinfo_key, &deliveryinfo);
+                            }
+                            memset(sysdeliveryinfo_key, 0, sizeof(sysdeliveryinfo_key));
+                        }
+
+                        if (R_SUCCEEDED(rc) && updatetype==UpdateType_Send) {
+                            rc = nssuRequestSendSystemUpdate(&asyncres, ipaddr, port, &deliveryinfo);
+                            printf("nssuRequestSendSystemUpdate(): 0x%x\n", rc);
+                        }
+                        else if (R_SUCCEEDED(rc) && updatetype==UpdateType_Receive) {
+                            if (manager_enabled) {
+                                struct in_addr nxaddr = {.s_addr = htonl(INADDR_LOOPBACK)};
+                                rc = managerSetup(&manager, &nxaddr, port, log_file, &transfer_state, datadir, depth);
+                                printf("managerSetup(): 0x%x\n", rc);
+
+                                manager_setup = true;
+                            }
+
+                            if (R_SUCCEEDED(rc)) {
+                                rc = nssuControlSetupToReceiveSystemUpdate(&sucontrol);
+                                printf("nssuControlSetupToReceiveSystemUpdate(): 0x%x\n", rc);
+                            }
+
+                            if (R_SUCCEEDED(rc)) {
+                                rc = nssuControlRequestReceiveSystemUpdate(&sucontrol, &asyncres, ipaddr, port, &deliveryinfo);
+                                printf("nssuControlRequestReceiveSystemUpdate(): 0x%x\n", rc);
+                            }
+                        }
                     }
                 }
 
-                if (R_SUCCEEDED(rc)) state=1;
+                if (R_SUCCEEDED(rc)) state = UpdateState_InProgress;
             }
-            else if(state==1) {
+            else if(state==UpdateState_InProgress) {
                 NsSystemUpdateProgress progress={0};
                 if (updatetype==UpdateType_Download)
                     rc = nssuControlGetDownloadProgress(&sucontrol, &progress);
@@ -660,7 +705,7 @@ int main(int argc, char* argv[])
 
                         if (R_SUCCEEDED(rc)) {
                             printf("The update has finished. Press + to exit%s.\n", updatetype!=UpdateType_Send ? " and reboot" : "");
-                            state=2;
+                            state = UpdateState_Done;
                         }
                      }
                 }
@@ -686,7 +731,7 @@ int main(int argc, char* argv[])
 
     if (log_file) fclose(log_file);
 
-    if (state==2 && updatetype!=UpdateType_Send) {
+    if (state==UpdateState_Done && updatetype!=UpdateType_Send) {
         printf("Rebooting...\n");
         consoleUpdate(NULL);
         rc = appletRequestToReboot();
