@@ -44,6 +44,12 @@ DATA		:=	data
 INCLUDES	:=	include contents-delivery-manager/common
 #ROMFS	:=	romfs
 
+APP_VERSION	:=	1.0.0
+
+ifeq ($(RELEASE),)
+	APP_VERSION	:=	$(APP_VERSION)-$(shell git describe --dirty --always)
+endif
+
 #---------------------------------------------------------------------------------
 # options for code generation
 #---------------------------------------------------------------------------------

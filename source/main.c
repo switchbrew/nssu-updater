@@ -369,6 +369,7 @@ int main(int argc, char* argv[])
 
     char datadir[PATH_MAX];
     s32 depth=3;
+    bool manager_enabled=0, manager_setup=0;
 
     appletLockExit();
 
@@ -423,19 +424,25 @@ int main(int argc, char* argv[])
             printf("Using system-version from arg: v%u\n", system_version);
 
         if (datadir[0]) printf("Using datadir from arg: %s\n", datadir);
+
+        if (system_version && datadir[0]) manager_enabled = true;
     }
 
     if (!sysver_flag) printf("The following are not available since [4.0.0+] is required: Send/Receive and nssuControlSetupCardUpdateViaSystemUpdater.\n");
 
-    // TODO: Disable unneeded buttons with fileassoc-arg.
-    printf("Press - to install update downloaded from CDN.\n");
-    printf("Press A to install update with nssuControlSetupCardUpdate.\n");
-    if (sysver_flag) printf("Press B to install update with nssuControlSetupCardUpdateViaSystemUpdater.\n");
-    else keymask |= KEY_B;
+    if (!manager_enabled) {
+        printf("Press - to install update downloaded from CDN.\n");
+        printf("Press A to install update with nssuControlSetupCardUpdate.\n");
+        if (sysver_flag) printf("Press B to install update with nssuControlSetupCardUpdateViaSystemUpdater.\n");
+        else keymask |= KEY_B;
+    }
+    else keymask |= KEY_MINUS|KEY_A|KEY_B;
     if (sysver_flag && ipaddr) {
-        printf("Press X to Send the sysupdate.\n");
+        if (!manager_enabled) printf("Press X to Send the sysupdate.\n");
+        else keymask |= KEY_X;
         if (system_version) printf("Press Y to Receive the sysupdate.\n");
         else keymask |= KEY_Y;
+        // TODO: Server-mode, where this just runs deliveryManager with connections accepted from the network.
     }
     else keymask |= (KEY_X|KEY_Y);
     printf("Press + exit, aborting any operations prior to the final stage.\n");
@@ -537,10 +544,12 @@ int main(int argc, char* argv[])
                         printf("nssuRequestSendSystemUpdate(): 0x%x\n", rc);
                     }
                     else if (R_SUCCEEDED(rc) && (kDown & KEY_Y)) {
-                        if (datadir[0]) {
+                        if (manager_enabled) {
                             struct in_addr nxaddr = {.s_addr = htonl(INADDR_LOOPBACK)};
                             rc = managerSetup(&manager, &nxaddr, port, log_file, &transfer_state, datadir, depth);
                             printf("managerSetup(): 0x%x\n", rc);
+
+                            manager_setup = true;
                         }
 
                         if (R_SUCCEEDED(rc)) {
@@ -586,7 +595,7 @@ int main(int argc, char* argv[])
                 if (R_SUCCEEDED(rc)) {
                     Result rc2=0;
 
-                    if (updatetype==UpdateType_Receive && deliveryManagerCheckFinished(&manager)) {
+                    if (manager_setup && deliveryManagerCheckFinished(&manager)) {
                         rc2 = deliveryManagerGetResult(&manager);
                         deliveryManagerClose(&manager);
                         if (R_FAILED(rc2)) printf("deliveryManagerGetResult(): 0x%x\n", rc2);
@@ -669,9 +678,11 @@ int main(int argc, char* argv[])
     nssuControlClose(&sucontrol);
     nssuExit();
 
-    printf("deliveryManagerClose()...\n");
-    consoleUpdate(NULL);
-    deliveryManagerClose(&manager);
+    if (manager_setup) {
+        printf("deliveryManagerClose()...\n");
+        consoleUpdate(NULL);
+        deliveryManagerClose(&manager);
+    }
 
     if (log_file) fclose(log_file);
 
