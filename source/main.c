@@ -86,12 +86,12 @@ Result managerHandlerMetaLoad(void* userdata, struct DeliveryContentEntry *entry
     return rc;
 }
 
-Result managerHandlerMetaRecord(void* userdata, NcmPackagedContentInfo* record, const NcmContentMetaKey* content_meta_key) {
+Result managerHandlerMetaPackagedContentInfo(void* userdata, NcmPackagedContentInfo* meta_content_info, const NcmContentMetaKey* content_meta_key) {
     Result rc=0;
     struct DeliveryContentEntry *entry = NULL;
 
     rc = deliveryManagerGetContentEntry((DeliveryManager*)userdata, &entry, content_meta_key, NULL);
-    if (R_SUCCEEDED(rc)) memcpy(record, &entry->content_info, sizeof(NcmPackagedContentInfo));
+    if (R_SUCCEEDED(rc)) memcpy(meta_content_info, &entry->content_info, sizeof(NcmPackagedContentInfo));
     return rc;
 }
 
@@ -143,7 +143,7 @@ Result managerSetup(DeliveryManager *manager, struct in_addr *nxaddr, u16 port, 
     if (R_FAILED(rc)) printf("deliveryManagerCreate() failed: 0x%x\n", rc);
     if (R_SUCCEEDED(rc)) {
         if (log_file) deliveryManagerSetLogFile(manager, log_file);
-        deliveryManagerSetHandlerGetMetaContentRecord(manager, managerHandlerMetaRecord, manager);
+        deliveryManagerSetHandlerGetMetaPackagedContentInfo(manager, managerHandlerMetaPackagedContentInfo, manager);
         deliveryManagerSetHandlersGetContent(manager, transfer_state, managerContentTransferInit, managerContentTransferExit, managerContentTransfer);
 
         rc = ncmInitialize();
