@@ -18,6 +18,9 @@
 
 #include "delivery.h"
 
+#define TRACE(_f,fmt,...) if (_f) fprintf(_f, "%s: " fmt, __PRETTY_FUNCTION__, ## __VA_ARGS__)
+#define TRACE_PRINT(_f,fmt,...) {if (_f) fprintf(_f, "%s: " fmt, __PRETTY_FUNCTION__, ## __VA_ARGS__); printf(fmt, ## __VA_ARGS__);}
+
 // qlaunch handles Eula for sysupdates, however we won't.
 
 typedef enum {
@@ -149,25 +152,25 @@ Result managerSetup(DeliveryManager *manager, struct in_addr *nxaddr, u16 port, 
     NcmContentStorage storage={0};
 
     rc = deliveryManagerCreate(manager, true, nxaddr, port);
-    if (R_FAILED(rc)) printf("deliveryManagerCreate() failed: 0x%x\n", rc);
+    if (R_FAILED(rc)) TRACE_PRINT(log_file, "deliveryManagerCreate() failed: 0x%x\n", rc)
     if (R_SUCCEEDED(rc)) {
         if (log_file) deliveryManagerSetLogFile(manager, log_file);
         deliveryManagerSetHandlerGetMetaPackagedContentInfo(manager, managerHandlerMetaPackagedContentInfo, manager);
         deliveryManagerSetHandlersGetContent(manager, transfer_state, managerContentTransferInit, managerContentTransferExit, managerContentTransfer);
 
         rc = ncmInitialize();
-        if (R_FAILED(rc)) printf("ncmInitialize() failed: 0x%x\n", rc);
+        if (R_FAILED(rc)) TRACE_PRINT(log_file, "ncmInitialize() failed: 0x%x\n", rc)
 
         if (R_SUCCEEDED(rc)) {
             rc = ncmOpenContentStorage(&storage, NcmStorageId_BuiltInSystem);
-            if (R_FAILED(rc)) printf("ncmOpenContentStorage failed: 0x%x\n", rc);
+            if (R_FAILED(rc)) TRACE_PRINT(log_file, "ncmOpenContentStorage failed: 0x%x\n", rc)
         }
 
         if (R_SUCCEEDED(rc)) {
-            printf("Scanning datadir...\n");
+            TRACE_PRINT(log_file, "Scanning datadir...\n")
             consoleUpdate(NULL);
             rc = deliveryManagerScanDataDir(manager, datadir, depth, managerHandlerMetaLoad, &storage);
-            if (R_FAILED(rc)) printf("deliveryManagerScanDataDir() failed: 0x%x\n", rc);
+            if (R_FAILED(rc)) TRACE_PRINT(log_file, "deliveryManagerScanDataDir() failed: 0x%x\n", rc)
         }
 
         ncmContentStorageClose(&storage);
@@ -175,17 +178,17 @@ Result managerSetup(DeliveryManager *manager, struct in_addr *nxaddr, u16 port, 
 
         if (R_SUCCEEDED(rc)) {
             rc = deliveryManagerRequestRun(manager);
-            if (R_FAILED(rc)) printf("deliveryManagerRequestRun() failed: 0x%x\n", rc);
+            if (R_FAILED(rc)) TRACE_PRINT(log_file, "deliveryManagerRequestRun() failed: 0x%x\n", rc)
         }
 
-        if (R_SUCCEEDED(rc)) printf("Server started.\n");
+        if (R_SUCCEEDED(rc)) TRACE_PRINT(log_file, "Server started.\n")
         consoleUpdate(NULL);
     }
 
     return rc;
 }
 
-Result sukeyLocate(u8 *out_key, NsSystemDeliveryInfo *delivery_info) {
+Result sukeyLocate(FILE *log_file, u8 *out_key, NsSystemDeliveryInfo *delivery_info) {
     Result rc=0;
     Handle debughandle=0;
     bool found=0;
@@ -201,32 +204,32 @@ Result sukeyLocate(u8 *out_key, NsSystemDeliveryInfo *delivery_info) {
     u8 calc_hash[SHA256_HASH_SIZE]={0};
 
     if (!envIsSyscallHinted(0x60) || !envIsSyscallHinted(0x69) || !envIsSyscallHinted(0x6A)) {
-        printf("Debug SVCs aren't available, make sure you're running the latest hbloader release.\n");
+        TRACE_PRINT(log_file, "Debug SVCs aren't available, make sure you're running the latest hbloader release.\n")
         rc = MAKERESULT(Module_Libnx, LibnxError_NotFound);
     }
 
     // Get the PID for ns.
     if (R_SUCCEEDED(rc)) {
         rc = pmdmntInitialize();
-        if (R_FAILED(rc)) printf("pmdmntInitialize(): 0x%x\n", rc);
+        if (R_FAILED(rc)) TRACE_PRINT(log_file, "pmdmntInitialize(): 0x%x\n", rc)
     }
 
     if (R_SUCCEEDED(rc)) {
         rc = pmdmntGetProcessId(&pid, 0x010000000000001F);
-        if (R_FAILED(rc)) printf("pmdmntGetProcessId(): 0x%x\n", rc);
+        if (R_FAILED(rc)) TRACE_PRINT(log_file, "pmdmntGetProcessId(): 0x%x\n", rc)
         pmdmntExit();
     }
 
     // Get the LoaderModuleInfo for ns.
     if (R_SUCCEEDED(rc)) {
         rc = ldrDmntInitialize();
-        if (R_FAILED(rc)) printf("ldrDmntInitialize(): 0x%x\n", rc);
+        if (R_FAILED(rc)) TRACE_PRINT(log_file, "ldrDmntInitialize(): 0x%x\n", rc)
 
         if (R_SUCCEEDED(rc)) {
             rc = ldrDmntGetProcessModuleInfo(pid, module_infos, 1, &total_out);
-            if (R_FAILED(rc)) printf("ldrDmntGetProcessModuleInfo(): 0x%x\n", rc);
+            if (R_FAILED(rc)) TRACE_PRINT(log_file, "ldrDmntGetProcessModuleInfo(): 0x%x\n", rc)
             if (R_SUCCEEDED(rc) && total_out!=1) {
-                printf("total_out from ldrDmntGetProcessModuleInfo() is invalid: %d.\n", total_out);
+                TRACE_PRINT(log_file, "total_out from ldrDmntGetProcessModuleInfo() is invalid: %d.\n", total_out)
                 rc = MAKERESULT(Module_Libnx, LibnxError_BadInput);
             }
             ldrDmntExit();
@@ -239,12 +242,12 @@ Result sukeyLocate(u8 *out_key, NsSystemDeliveryInfo *delivery_info) {
         cur_module_size = module_infos[0].size;
 
         rc = svcDebugActiveProcess(&debughandle, pid);
-        if (R_FAILED(rc)) printf("svcDebugActiveProcess(): 0x%x\n", rc);
+        if (R_FAILED(rc)) TRACE_PRINT(log_file, "svcDebugActiveProcess(): 0x%x\n", rc)
 
         if (R_SUCCEEDED(rc)) {
             while (R_SUCCEEDED(rc) && cur_module_size>0) {
                 rc = svcQueryDebugProcessMemory(&meminfo, &pageinfo, debughandle, cur_addr);
-                if (R_FAILED(rc)) printf("svcQueryDebugProcessMemory(): 0x%x\n", rc);
+                if (R_FAILED(rc)) TRACE_PRINT(log_file, "svcQueryDebugProcessMemory(): 0x%x\n", rc)
 
                 if (R_SUCCEEDED(rc)) {
                     if (meminfo.size > cur_module_size) break;
@@ -259,7 +262,7 @@ Result sukeyLocate(u8 *out_key, NsSystemDeliveryInfo *delivery_info) {
             }
 
             if (R_SUCCEEDED(rc) && !found) {
-                printf("Failed to find the R-- section in ns.\n");
+                TRACE_PRINT(log_file, "Failed to find the R-- section in ns.\n")
                 rc = MAKERESULT(Module_Libnx, LibnxError_NotFound);
             }
 
@@ -267,7 +270,7 @@ Result sukeyLocate(u8 *out_key, NsSystemDeliveryInfo *delivery_info) {
                 rosection_size = meminfo.size;
                 rosection_buf = (u8*)malloc(rosection_size);
                 if (rosection_buf==NULL) {
-                    printf("Failed to allocate memory for rosection_buf.\n");
+                    TRACE_PRINT(log_file, "Failed to allocate memory for rosection_buf.\n")
                     rc = MAKERESULT(Module_Libnx, LibnxError_OutOfMemory);
                 }
                 else
@@ -276,7 +279,7 @@ Result sukeyLocate(u8 *out_key, NsSystemDeliveryInfo *delivery_info) {
 
             if (R_SUCCEEDED(rc)) {
                 rc = svcReadDebugProcessMemory(rosection_buf, debughandle, cur_addr, rosection_size);
-                if (R_FAILED(rc)) printf("svcReadDebugProcessMemory(): 0x%x\n", rc);
+                if (R_FAILED(rc)) TRACE_PRINT(log_file, "svcReadDebugProcessMemory(): 0x%x\n", rc)
             }
 
             svcCloseHandle(debughandle);
@@ -296,7 +299,7 @@ Result sukeyLocate(u8 *out_key, NsSystemDeliveryInfo *delivery_info) {
         }
 
         if (!found) {
-            printf("Failed to find the hmac key.\n");
+            TRACE_PRINT(log_file, "Failed to find the hmac key.\n")
             rc = MAKERESULT(Module_Libnx, LibnxError_NotFound);
         }
 
@@ -388,12 +391,20 @@ int main(int argc, char* argv[])
 
     consoleInit(NULL);
 
-    printf("nssu-updater\n");
-
     memset(datadir, 0, sizeof(datadir));
 
+    if (R_SUCCEEDED(rc)) {
+        log_file = fopen("nssu-updater.log", "w");
+        if (log_file==NULL) {
+            rc = MAKERESULT(Module_Libnx, LibnxError_IoError);
+            printf("Failed to open the log file.\n");
+        }
+    }
+
+    TRACE_PRINT(log_file, "nssu-updater %s\n", VERSION)
+
     if (!configassocWrite("/config/nx-hbmenu/fileassoc/nssu-updater.cfg", "/switch/nssu-updater/nssu-updater.nro", ".nssu-update"))
-        printf("Failed to write the hbmenu config.\n");
+        TRACE_PRINT(log_file, "Failed to write the hbmenu config.\n")
 
     if (argc > 1) {
         char *argptr = argv[1];
@@ -427,48 +438,45 @@ int main(int argc, char* argv[])
         if (endarg == optarg) errno = EINVAL;
         if (errno != 0) {
             system_version = 0;
-            printf("Invalid input arg for system-version.\n");
+            TRACE_PRINT(log_file, "Invalid input arg for system-version.\n")
         }
         else
-            printf("Using system-version from arg: v%u\n", system_version);
+            TRACE_PRINT(log_file, "Using system-version from arg: v%u\n", system_version)
 
-        if (datadir[0]) printf("Using datadir from arg: %s\n", datadir);
+        if (datadir[0]) TRACE_PRINT(log_file, "Using datadir from arg: %s\n", datadir)
 
         if (system_version && datadir[0]) manager_enabled = true;
     }
 
-    if (!sysver_flag) printf("The following are not available since [4.0.0+] is required: Send/Receive and nssuControlSetupCardUpdateViaSystemUpdater.\n");
-
-    if (!system_version) {
-        printf("Press - to install update downloaded from CDN.\n");
-        printf("Press A to install update with nssuControlSetupCardUpdate.\n");
-        if (sysver_flag) printf("Press B to install update with nssuControlSetupCardUpdateViaSystemUpdater.\n");
-        else keymask |= KEY_B;
+    if (R_SUCCEEDED(rc)) {
+        rc = nssuInitialize();
+        if (R_FAILED(rc)) TRACE_PRINT(log_file, "nssuInitialize(): 0x%x\n", rc)
     }
-    else keymask |= KEY_MINUS|KEY_A|KEY_B;
-    if (sysver_flag && ipaddr) {
-        if (!manager_enabled) printf("Press X to Send the sysupdate.\n");
-        else keymask |= KEY_X;
-        if (system_version) printf("Press Y to Receive the sysupdate.\n");
-        else keymask |= KEY_Y;
-    }
-    else keymask |= (KEY_X|KEY_Y);
-    if (manager_enabled) {
-        printf("Press DPad-Down for server-mode.\n");
-    }
-    else keymask |= KEY_DDOWN;
-    printf("Press + exit, aborting the operation prior to applying the update.\n");
 
-    rc = nssuInitialize();
-    if (R_FAILED(rc)) printf("nssuInitialize(): 0x%x\n", rc);
+    if (R_SUCCEEDED(rc)) {
+        if (!sysver_flag) TRACE_PRINT(log_file, "The following are not available since [4.0.0+] is required: Send/Receive and nssuControlSetupCardUpdateViaSystemUpdater.\n")
 
-    if (R_SUCCEEDED(rc)) { // TODO: Should this be used with more than just deliveryManager?
-        log_file = fopen("nssu-updater.log", "w");
-        if (log_file==NULL) {
-            rc = MAKERESULT(Module_Libnx, LibnxError_IoError);
-            printf("Failed to open the log file.\n");
+        if (!system_version) {
+            printf("Press - to install update downloaded from CDN.\n");
+            printf("Press A to install update with nssuControlSetupCardUpdate.\n");
+            if (sysver_flag) printf("Press B to install update with nssuControlSetupCardUpdateViaSystemUpdater.\n");
+            else keymask |= KEY_B;
         }
+        else keymask |= KEY_MINUS|KEY_A|KEY_B;
+        if (sysver_flag && ipaddr) {
+            if (!manager_enabled) printf("Press X to Send the sysupdate.\n");
+            else keymask |= KEY_X;
+            if (system_version) printf("Press Y to Receive the sysupdate.\n");
+            else keymask |= KEY_Y;
+        }
+        else keymask |= (KEY_X|KEY_Y);
+        if (manager_enabled) {
+            printf("Press DPad-Down for server-mode.\n");
+        }
+        else keymask |= KEY_DDOWN;
     }
+
+    printf("Press + exit, aborting the operation prior to applying the update.\n");
 
     u32 cnt=0;
 
@@ -520,8 +528,10 @@ int main(int argc, char* argv[])
                 if ((updatetype==UpdateType_Receive && !manager_enabled) || updatetype==UpdateType_Send || updatetype==UpdateType_Server) {
                     struct in_addr tmpaddr = {.s_addr = htonl(ipaddr)};
                     if (updatetype==UpdateType_Server) tmpaddr.s_addr = gethostid();
-                    printf("%s: %s\n", updatetype!=UpdateType_Server ? "Using remote IP address" : "Console (server) IP address", inet_ntoa(tmpaddr));
+                    TRACE_PRINT(log_file, "%s: %s\n", updatetype!=UpdateType_Server ? "Using remote IP address" : "Console (server) IP address", inet_ntoa(tmpaddr));
                 }
+
+                TRACE(log_file, "You selected update-type: %s.\n", updatedesc);
 
                 printf(    CONSOLE_ESC(31;1m) /* Set color to red */
                 "You selected update-type:\n%s.\n"
@@ -537,57 +547,57 @@ int main(int argc, char* argv[])
             else if (state==UpdateState_Confirm && (kHeld == (KEY_A|KEY_B|KEY_X|KEY_Y|KEY_DUP))) {
                 if (updatetype==UpdateType_Download || updatetype==UpdateType_Card || updatetype==UpdateType_CardViaSystemUpdater || updatetype==UpdateType_Receive) {
                     rc = nssuOpenSystemUpdateControl(&sucontrol);
-                    printf("nssuOpenSystemUpdateControl(): 0x%x\n", rc);
+                    TRACE_PRINT(log_file, "nssuOpenSystemUpdateControl(): 0x%x\n", rc)
                 }
 
                 if (R_SUCCEEDED(rc)) {
                     if (updatetype==UpdateType_Download) {
                         rc = nssuControlRequestDownloadLatestUpdate(&sucontrol, &asyncres);
-                        printf("nssuControlRequestDownloadLatestUpdate(): 0x%x\n", rc);
+                        TRACE_PRINT(log_file, "nssuControlRequestDownloadLatestUpdate(): 0x%x\n", rc)
                     }
                     else if (updatetype==UpdateType_Card || updatetype==UpdateType_CardViaSystemUpdater) {
                         if (R_SUCCEEDED(rc)) {
                             if (updatetype==UpdateType_Card) {
                                 rc = nssuControlSetupCardUpdate(&sucontrol, NULL, NSSU_CARDUPDATE_TMEM_SIZE_DEFAULT);
-                                printf("nssuControlSetupCardUpdate(): 0x%x\n", rc);
+                                TRACE_PRINT(log_file, "nssuControlSetupCardUpdate(): 0x%x\n", rc)
                             }
                             else if (updatetype==UpdateType_CardViaSystemUpdater) {
                                 rc = nssuControlSetupCardUpdateViaSystemUpdater(&sucontrol, NULL, NSSU_CARDUPDATE_TMEM_SIZE_DEFAULT);
-                                printf("nssuControlSetupCardUpdateViaSystemUpdater(): 0x%x\n", rc);
+                                TRACE_PRINT(log_file, "nssuControlSetupCardUpdateViaSystemUpdater(): 0x%x\n", rc)
                             }
                         }
 
                         if (R_SUCCEEDED(rc)) {
                             rc = nssuControlHasPreparedCardUpdate(&sucontrol, &tmpflag);
-                            printf("nssuControlHasPreparedCardUpdate(): 0x%x, %d\n", rc, tmpflag);
+                            TRACE_PRINT(log_file, "nssuControlHasPreparedCardUpdate(): 0x%x, %d\n", rc, tmpflag)
                             if (R_SUCCEEDED(rc) && tmpflag) {
-                                printf("Update was already Prepared, aborting.\n");
+                                TRACE_PRINT(log_file, "Update was already Prepared, aborting.\n")
                                 rc = 1;
                             }
                         }
 
                         if (R_SUCCEEDED(rc)) {
                             rc = nssuControlRequestPrepareCardUpdate(&sucontrol, &asyncres);
-                            printf("nssuControlRequestPrepareCardUpdate(): 0x%x\n", rc);
+                            TRACE_PRINT(log_file, "nssuControlRequestPrepareCardUpdate(): 0x%x\n", rc)
                         }
                     }
                     else if (updatetype==UpdateType_Send || updatetype==UpdateType_Receive || updatetype==UpdateType_Server) {
                         NsSystemDeliveryInfo deliveryinfo={0};
                         if (updatetype==UpdateType_Send || updatetype==UpdateType_Receive) {
                             rc = nsInitialize();
-                            if (R_FAILED(rc)) printf("nsInitialize(): 0x%x\n", rc);
+                            if (R_FAILED(rc)) TRACE_PRINT(log_file, "nsInitialize(): 0x%x\n", rc)
 
                             if (R_SUCCEEDED(rc)) {
                                 rc = nsGetSystemDeliveryInfo(&deliveryinfo);
-                                printf("nsGetSystemDeliveryInfo(): 0x%x\n", rc);
+                                TRACE_PRINT(log_file, "nsGetSystemDeliveryInfo(): 0x%x\n", rc)
 
                                 nsExit();
                             }
                         }
 
                         if (R_SUCCEEDED(rc) && updatetype==UpdateType_Receive) {
-                            rc = sukeyLocate(sysdeliveryinfo_key, &deliveryinfo);
-                            printf("sukeyLocate(): 0x%x\n", rc);
+                            rc = sukeyLocate(log_file, sysdeliveryinfo_key, &deliveryinfo);
+                            TRACE_PRINT(log_file, "sukeyLocate(): 0x%x\n", rc)
 
                             if (R_SUCCEEDED(rc)) {
                                 deliveryinfo.data.system_update_meta_version = system_version;
@@ -598,25 +608,25 @@ int main(int argc, char* argv[])
 
                         if (R_SUCCEEDED(rc) && updatetype==UpdateType_Send) {
                             rc = nssuRequestSendSystemUpdate(&asyncres, ipaddr, port, &deliveryinfo);
-                            printf("nssuRequestSendSystemUpdate(): 0x%x\n", rc);
+                            TRACE_PRINT(log_file, "nssuRequestSendSystemUpdate(): 0x%x\n", rc)
                         }
                         else if (R_SUCCEEDED(rc) && (updatetype==UpdateType_Receive || updatetype==UpdateType_Server)) {
                             if ((updatetype==UpdateType_Receive && manager_enabled) || updatetype==UpdateType_Server) {
                                 struct in_addr nxaddr = {.s_addr = htonl(updatetype==UpdateType_Receive ? INADDR_LOOPBACK : INADDR_ANY)};
                                 rc = managerSetup(&manager, &nxaddr, port, log_file, &transfer_state, datadir, depth);
-                                printf("managerSetup(): 0x%x\n", rc);
+                                TRACE_PRINT(log_file, "managerSetup(): 0x%x\n", rc)
 
                                 manager_setup = true;
                             }
 
                             if (R_SUCCEEDED(rc) && updatetype==UpdateType_Receive) {
                                 rc = nssuControlSetupToReceiveSystemUpdate(&sucontrol);
-                                printf("nssuControlSetupToReceiveSystemUpdate(): 0x%x\n", rc);
+                                TRACE_PRINT(log_file, "nssuControlSetupToReceiveSystemUpdate(): 0x%x\n", rc)
                             }
 
                             if (R_SUCCEEDED(rc) && updatetype==UpdateType_Receive) {
                                 rc = nssuControlRequestReceiveSystemUpdate(&sucontrol, &asyncres, ipaddr, port, &deliveryinfo);
-                                printf("nssuControlRequestReceiveSystemUpdate(): 0x%x\n", rc);
+                                TRACE_PRINT(log_file, "nssuControlRequestReceiveSystemUpdate(): 0x%x\n", rc)
                             }
                         }
                     }
@@ -628,7 +638,7 @@ int main(int argc, char* argv[])
                 NsSystemUpdateProgress progress={0};
                 if (updatetype==UpdateType_Download)
                     rc = nssuControlGetDownloadProgress(&sucontrol, &progress);
-                else if (updatetype==UpdateType_Card)
+                else if (updatetype==UpdateType_Card || updatetype==UpdateType_CardViaSystemUpdater)
                     rc = nssuControlGetPrepareCardUpdateProgress(&sucontrol, &progress);
                 else if (updatetype==UpdateType_Send)
                     rc = nssuGetSendSystemUpdateProgress(&progress);
@@ -658,7 +668,7 @@ int main(int argc, char* argv[])
                         if (updatetype==UpdateType_Server) printf("Operation finished.\n");
                         rc2 = deliveryManagerGetResult(&manager);
                         deliveryManagerClose(&manager);
-                        printf("deliveryManagerGetResult(): 0x%x\n", rc2);
+                        TRACE_PRINT(log_file, "deliveryManagerGetResult(): 0x%x\n", rc2)
                         if (updatetype==UpdateType_Server) rc = rc2;
                     }
 
@@ -670,7 +680,7 @@ int main(int argc, char* argv[])
                             printf("asyncResultGet...\n");
                             consoleUpdate(NULL);
                             rc = asyncResultGet(&asyncres);
-                            printf("asyncResultGet(): 0x%x\n", rc);
+                            TRACE_PRINT(log_file, "asyncResultGet(): 0x%x\n", rc)
                             consoleUpdate(NULL);
 
                             if (R_SUCCEEDED(rc)) {
@@ -685,45 +695,45 @@ int main(int argc, char* argv[])
                         if (R_SUCCEEDED(rc) && updatetype!=UpdateType_Send) {
                             if (updatetype==UpdateType_Download) {
                                 rc = nssuControlHasDownloaded(&sucontrol, &tmpflag);
-                                printf("nssuControlHasDownloaded(): 0x%x, %d\n", rc, tmpflag);
+                                TRACE_PRINT(log_file, "nssuControlHasDownloaded(): 0x%x, %d\n", rc, tmpflag)
                             }
-                            else if (updatetype==UpdateType_Card) {
+                            else if (updatetype==UpdateType_Card || updatetype==UpdateType_CardViaSystemUpdater) {
                                 rc = nssuControlHasPreparedCardUpdate(&sucontrol, &tmpflag);
-                                printf("nssuControlHasPreparedCardUpdate(): 0x%x, %d\n", rc, tmpflag);
+                                TRACE_PRINT(log_file, "nssuControlHasPreparedCardUpdate(): 0x%x, %d\n", rc, tmpflag)
                             }
                             else if (updatetype==UpdateType_Receive) {
                                 rc = nssuControlHasReceived(&sucontrol, &tmpflag);
-                                printf("nssuControlHasReceived(): 0x%x, %d\n", rc, tmpflag);
+                                TRACE_PRINT(log_file, "nssuControlHasReceived(): 0x%x, %d\n", rc, tmpflag)
                             }
 
                             if (R_SUCCEEDED(rc) && !tmpflag) {
-                                printf("Update is not ready, aborting.\n");
+                                TRACE_PRINT(log_file, "Update is not ready, aborting.\n")
                                 rc = 1;
                             }
                             consoleUpdate(NULL);
                         }
 
                         if (R_SUCCEEDED(rc) && updatetype!=UpdateType_Send) {
-                            printf("Applying update...\n");
+                            TRACE_PRINT(log_file, "Applying update...\n")
                             consoleUpdate(NULL);
 
                             if (updatetype==UpdateType_Download) {
                                 rc = nssuControlApplyDownloadedUpdate(&sucontrol);
-                                printf("nssuControlApplyDownloadedUpdate(): 0x%x\n", rc);
+                                TRACE_PRINT(log_file, "nssuControlApplyDownloadedUpdate(): 0x%x\n", rc)
                             }
-                            else if (updatetype==UpdateType_Card) {
+                            else if (updatetype==UpdateType_Card || updatetype==UpdateType_CardViaSystemUpdater) {
                                 rc = nssuControlApplyCardUpdate(&sucontrol);
-                                printf("nssuControlApplyCardUpdate(): 0x%x\n", rc);
+                                TRACE_PRINT(log_file, "nssuControlApplyCardUpdate(): 0x%x\n", rc)
                             }
                             else if (updatetype==UpdateType_Receive) {
                                 rc = nssuControlApplyReceivedUpdate(&sucontrol);
-                                printf("nssuControlApplyReceivedUpdate(): 0x%x\n", rc);
+                                TRACE_PRINT(log_file, "nssuControlApplyReceivedUpdate(): 0x%x\n", rc)
                             }
                         }
                     }
 
                     if (R_SUCCEEDED(rc2) && R_SUCCEEDED(rc)) {
-                        printf("The update has finished. Press + to exit%s.\n", updatetype!=UpdateType_Send && updatetype!=UpdateType_Server ? " and reboot" : "");
+                        TRACE_PRINT(log_file, "The update has finished. Press + to exit%s.\n", updatetype!=UpdateType_Send && updatetype!=UpdateType_Server ? " and reboot" : "")
                         state = UpdateState_Done;
                     }
                 }
@@ -733,6 +743,8 @@ int main(int argc, char* argv[])
         // Update the console, sending a new frame to the display
         consoleUpdate(NULL);
     }
+
+    TRACE(log_file, "Exiting...\n");
 
     printf("asyncResultClose...\n");
     consoleUpdate(NULL);
