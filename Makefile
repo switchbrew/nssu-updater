@@ -52,6 +52,8 @@ ifeq ($(RELEASE),)
 	APP_VERSION	:=	$(APP_VERSION)-$(shell git describe --dirty --always)
 endif
 
+DIST_PATH	:=	$(TARGET)_v$(APP_VERSION)
+
 #---------------------------------------------------------------------------------
 # options for code generation
 #---------------------------------------------------------------------------------
@@ -181,6 +183,11 @@ else
 	@rm -fr $(BUILD) $(TARGET).nsp $(TARGET).nso $(TARGET).npdm $(TARGET).elf
 endif
 
+#---------------------------------------------------------------------------------
+dist-bin: all
+	@mkdir -p $(DIST_PATH)/switch/nssu-updater
+	@cp $(OUTPUT).nro $(DIST_PATH)/switch/nssu-updater/nssu-updater.nro
+	@zip -rj $(DIST_PATH).zip $(DIST_PATH)
 
 #---------------------------------------------------------------------------------
 else

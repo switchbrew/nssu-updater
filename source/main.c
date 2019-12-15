@@ -391,7 +391,7 @@ int main(int argc, char* argv[])
 
     memset(datadir, 0, sizeof(datadir));
 
-    if (!configassocWrite("/config/nx-hbmenu/fileassoc/nssu-updater.cfg", "/switch/nssu_updater.nro", ".nssu-update")) // TODO: Update nro path.
+    if (!configassocWrite("/config/nx-hbmenu/fileassoc/nssu-updater.cfg", "/switch/nssu-updater/nssu-updater.nro", ".nssu-update"))
         printf("Failed to write the hbmenu config.\n");
 
     if (argc > 1) {
