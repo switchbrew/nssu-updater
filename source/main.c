@@ -27,6 +27,7 @@ typedef enum {
     UpdateType_CardViaSystemUpdater,
     UpdateType_Send,
     UpdateType_Receive,
+    UpdateType_Server,
 } UpdateType;
 
 typedef enum {
@@ -362,7 +363,7 @@ int main(int argc, char* argv[])
     bool sleepflag=0;
     bool sysver_flag = hosversionAtLeast(4,0,0);
     UpdateType updatetype=UpdateType_None;
-    u64 keymask=0, keymask_allbuttons=(KEY_MINUS|KEY_A|KEY_B|KEY_X|KEY_Y);
+    u64 keymask=0, keymask_allbuttons=(KEY_MINUS|KEY_A|KEY_B|KEY_X|KEY_Y|KEY_DDOWN);
 
     FILE *log_file = NULL;
     NsSystemUpdateControl sucontrol={0};
@@ -450,9 +451,12 @@ int main(int argc, char* argv[])
         else keymask |= KEY_X;
         if (system_version) printf("Press Y to Receive the sysupdate.\n");
         else keymask |= KEY_Y;
-        // TODO: Server-mode, where this just runs deliveryManager with connections accepted from the network.
     }
     else keymask |= (KEY_X|KEY_Y);
+    if (manager_enabled) {
+        printf("Press DPad-Down for server-mode.\n");
+    }
+    else keymask |= KEY_DDOWN;
     printf("Press + exit, aborting the operation prior to applying the update.\n");
 
     rc = nssuInitialize();
@@ -508,10 +512,15 @@ int main(int argc, char* argv[])
                     snprintf(tmpstr, sizeof(tmpstr)-1, "Receive, %s", manager_enabled ? "sysupdate will be installed with the above local datadir + version" : "sysupdate will be installed with the above remote IP addr + version");
                     updatedesc = tmpstr;
                 }
+                else if (kDown & KEY_DDOWN) {
+                    updatetype = UpdateType_Server;
+                    updatedesc = "Server, sysupdate from the above datadir will be sent to a client\nover the network";
+                }
 
-                if ((updatetype == UpdateType_Receive && !manager_enabled) || updatetype == UpdateType_Send) {
+                if ((updatetype==UpdateType_Receive && !manager_enabled) || updatetype==UpdateType_Send || updatetype==UpdateType_Server) {
                     struct in_addr tmpaddr = {.s_addr = htonl(ipaddr)};
-                    printf("Using remote IP address: %s\n", inet_ntoa(tmpaddr));
+                    if (updatetype==UpdateType_Server) tmpaddr.s_addr = gethostid();
+                    printf("%s: %s\n", updatetype!=UpdateType_Server ? "Using remote IP address" : "Console (server) IP address", inet_ntoa(tmpaddr));
                 }
 
                 printf(    CONSOLE_ESC(31;1m) /* Set color to red */
@@ -562,16 +571,18 @@ int main(int argc, char* argv[])
                             printf("nssuControlRequestPrepareCardUpdate(): 0x%x\n", rc);
                         }
                     }
-                    else if (updatetype==UpdateType_Send || updatetype==UpdateType_Receive) {
+                    else if (updatetype==UpdateType_Send || updatetype==UpdateType_Receive || updatetype==UpdateType_Server) {
                         NsSystemDeliveryInfo deliveryinfo={0};
-                        rc = nsInitialize();
-                        if (R_FAILED(rc)) printf("nsInitialize(): 0x%x\n", rc);
+                        if (updatetype==UpdateType_Send || updatetype==UpdateType_Receive) {
+                            rc = nsInitialize();
+                            if (R_FAILED(rc)) printf("nsInitialize(): 0x%x\n", rc);
 
-                        if (R_SUCCEEDED(rc)) {
-                            rc = nsGetSystemDeliveryInfo(&deliveryinfo);
-                            printf("nsGetSystemDeliveryInfo(): 0x%x\n", rc);
+                            if (R_SUCCEEDED(rc)) {
+                                rc = nsGetSystemDeliveryInfo(&deliveryinfo);
+                                printf("nsGetSystemDeliveryInfo(): 0x%x\n", rc);
 
-                            nsExit();
+                                nsExit();
+                            }
                         }
 
                         if (R_SUCCEEDED(rc) && updatetype==UpdateType_Receive) {
@@ -589,21 +600,21 @@ int main(int argc, char* argv[])
                             rc = nssuRequestSendSystemUpdate(&asyncres, ipaddr, port, &deliveryinfo);
                             printf("nssuRequestSendSystemUpdate(): 0x%x\n", rc);
                         }
-                        else if (R_SUCCEEDED(rc) && updatetype==UpdateType_Receive) {
-                            if (manager_enabled) {
-                                struct in_addr nxaddr = {.s_addr = htonl(INADDR_LOOPBACK)};
+                        else if (R_SUCCEEDED(rc) && (updatetype==UpdateType_Receive || updatetype==UpdateType_Server)) {
+                            if ((updatetype==UpdateType_Receive && manager_enabled) || updatetype==UpdateType_Server) {
+                                struct in_addr nxaddr = {.s_addr = htonl(updatetype==UpdateType_Receive ? INADDR_LOOPBACK : INADDR_ANY)};
                                 rc = managerSetup(&manager, &nxaddr, port, log_file, &transfer_state, datadir, depth);
                                 printf("managerSetup(): 0x%x\n", rc);
 
                                 manager_setup = true;
                             }
 
-                            if (R_SUCCEEDED(rc)) {
+                            if (R_SUCCEEDED(rc) && updatetype==UpdateType_Receive) {
                                 rc = nssuControlSetupToReceiveSystemUpdate(&sucontrol);
                                 printf("nssuControlSetupToReceiveSystemUpdate(): 0x%x\n", rc);
                             }
 
-                            if (R_SUCCEEDED(rc)) {
+                            if (R_SUCCEEDED(rc) && updatetype==UpdateType_Receive) {
                                 rc = nssuControlRequestReceiveSystemUpdate(&sucontrol, &asyncres, ipaddr, port, &deliveryinfo);
                                 printf("nssuControlRequestReceiveSystemUpdate(): 0x%x\n", rc);
                             }
@@ -623,6 +634,8 @@ int main(int argc, char* argv[])
                     rc = nssuGetSendSystemUpdateProgress(&progress);
                 else if (updatetype==UpdateType_Receive)
                     rc = nssuControlGetReceiveProgress(&sucontrol, &progress);
+                else if (updatetype==UpdateType_Server)
+                    deliveryManagerGetProgress(&manager, &progress.current_size, &progress.total_size);
                 consoleClear();
                 float percent = 0.0f;
                 if (progress.total_size > 0) percent = (((float)progress.current_size) / ((float)progress.total_size)) * 100.0f;
@@ -640,30 +653,35 @@ int main(int argc, char* argv[])
                 if (R_SUCCEEDED(rc)) {
                     Result rc2=0;
 
+                    if (updatetype==UpdateType_Server) rc2 = 1;
                     if (manager_setup && deliveryManagerCheckFinished(&manager)) {
+                        if (updatetype==UpdateType_Server) printf("Operation finished.\n");
                         rc2 = deliveryManagerGetResult(&manager);
                         deliveryManagerClose(&manager);
-                        if (R_FAILED(rc2)) printf("deliveryManagerGetResult(): 0x%x\n", rc2);
+                        printf("deliveryManagerGetResult(): 0x%x\n", rc2);
+                        if (updatetype==UpdateType_Server) rc = rc2;
                     }
 
-                    rc2 = asyncResultWait(&asyncres, 0);
-                    if (R_SUCCEEDED(rc2)) {
-                        printf("Operation finished.\n");
+                    if (updatetype!=UpdateType_Server) {
+                        rc2 = asyncResultWait(&asyncres, 0);
+                        if (R_SUCCEEDED(rc2)) {
+                            printf("Operation finished.\n");
 
-                        printf("asyncResultGet...\n");
-                        consoleUpdate(NULL);
-                        rc = asyncResultGet(&asyncres);
-                        printf("asyncResultGet(): 0x%x\n", rc);
-                        consoleUpdate(NULL);
-
-                        if (R_SUCCEEDED(rc)) {
-                            printf("asyncResultClose...\n");
+                            printf("asyncResultGet...\n");
                             consoleUpdate(NULL);
-                            asyncResultClose(&asyncres);
+                            rc = asyncResultGet(&asyncres);
+                            printf("asyncResultGet(): 0x%x\n", rc);
+                            consoleUpdate(NULL);
+
+                            if (R_SUCCEEDED(rc)) {
+                                printf("asyncResultClose...\n");
+                                consoleUpdate(NULL);
+                                asyncResultClose(&asyncres);
+                            }
                         }
                     }
 
-                    if (R_SUCCEEDED(rc2))  {
+                    if (R_SUCCEEDED(rc2) && updatetype!=UpdateType_Server) {
                         if (R_SUCCEEDED(rc) && updatetype!=UpdateType_Send) {
                             if (updatetype==UpdateType_Download) {
                                 rc = nssuControlHasDownloaded(&sucontrol, &tmpflag);
@@ -702,12 +720,12 @@ int main(int argc, char* argv[])
                                 printf("nssuControlApplyReceivedUpdate(): 0x%x\n", rc);
                             }
                         }
+                    }
 
-                        if (R_SUCCEEDED(rc)) {
-                            printf("The update has finished. Press + to exit%s.\n", updatetype!=UpdateType_Send ? " and reboot" : "");
-                            state = UpdateState_Done;
-                        }
-                     }
+                    if (R_SUCCEEDED(rc2) && R_SUCCEEDED(rc)) {
+                        printf("The update has finished. Press + to exit%s.\n", updatetype!=UpdateType_Send && updatetype!=UpdateType_Server ? " and reboot" : "");
+                        state = UpdateState_Done;
+                    }
                 }
             }
         }
@@ -731,7 +749,7 @@ int main(int argc, char* argv[])
 
     if (log_file) fclose(log_file);
 
-    if (state==UpdateState_Done && updatetype!=UpdateType_Send) {
+    if (state==UpdateState_Done && updatetype!=UpdateType_Send && updatetype!=UpdateType_Server) {
         printf("Rebooting...\n");
         consoleUpdate(NULL);
         rc = appletRequestToReboot();
