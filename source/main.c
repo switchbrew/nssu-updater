@@ -712,7 +712,7 @@ int main(int argc, char* argv[])
 
                 if (R_SUCCEEDED(rc)) state = UpdateState_InProgress;
             }
-            else if(state==UpdateState_InProgress) {
+            else if (state==UpdateState_InProgress) {
                 NsSystemUpdateProgress progress={0};
                 if (updatetype==UpdateType_Download)
                     rc = nssuControlGetDownloadProgress(&sucontrol, &progress);
