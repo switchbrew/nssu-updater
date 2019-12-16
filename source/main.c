@@ -188,6 +188,61 @@ Result managerSetup(DeliveryManager *manager, struct in_addr *nxaddr, u16 port, 
     return rc;
 }
 
+Result managerParseSystemVersion(const char *verstr, u32 *system_version) {
+    Result rc=0;
+    char *endarg = NULL;
+
+    errno = 0;
+    if (verstr[0] == 'v') verstr++;
+    *system_version = strtoul(verstr, &endarg, 0);
+    if (endarg == verstr) errno = EINVAL;
+    if (errno != 0) {
+        *system_version = 0;
+        rc = MAKERESULT(Module_Libnx, LibnxError_BadInput);
+    }
+
+    return rc;
+}
+
+SwkbdTextCheckResult managerShowKbdValidateText(char* tmp_string, size_t tmp_string_size) {
+    struct in_addr tmpaddr={0};
+    if (inet_pton(AF_INET, tmp_string, &tmpaddr)!=1) {
+        strncpy(tmp_string, "Bad IPv4 address.", tmp_string_size);
+        return SwkbdTextCheckResult_Bad;
+    }
+
+    return SwkbdTextCheckResult_OK;
+}
+
+Result managerShowKbd(FILE *log_file, bool select_ipaddr, const char *msg, char *out_str, size_t outstr_size) {
+    Result rc=0;
+    SwkbdConfig kbd;
+    rc = swkbdCreate(&kbd, 0);
+    if (R_FAILED(rc)) TRACE_PRINT(log_file, "swkbdCreate(): 0x%x\n", rc)
+
+    if (R_SUCCEEDED(rc)) {
+        swkbdConfigMakePresetDefault(&kbd);
+
+        swkbdConfigSetType(&kbd, SwkbdType_NumPad);
+        swkbdConfigSetTextDrawType(&kbd, SwkbdTextDrawType_Line);
+
+        swkbdConfigSetStringLenMax(&kbd, select_ipaddr ? 15 : 10);
+        if (select_ipaddr) {
+            swkbdConfigSetLeftOptionalSymbolKey(&kbd, ".");
+            swkbdConfigSetTextCheckCallback(&kbd, managerShowKbdValidateText);
+        }
+
+        swkbdConfigSetHeaderText(&kbd, msg);
+
+        rc = swkbdShow(&kbd, out_str, outstr_size);
+        if (R_FAILED(rc)) TRACE_PRINT(log_file, "swkbdShow(): 0x%x\n", rc)
+
+        swkbdClose(&kbd);
+    }
+
+    return rc;
+}
+
 Result sukeyLocate(FILE *log_file, u8 *out_key, NsSystemDeliveryInfo *delivery_info) {
     Result rc=0;
     Handle debughandle=0;
@@ -376,8 +431,8 @@ int main(int argc, char* argv[])
     struct ManagerContentTransferState transfer_state={0};
 
     u16 port=55556;
-    u32 ipaddr = ntohl(__nxlink_host.s_addr); // TODO: Should specifiying ipaddr via other means be supported?
-    u32 system_version=0;                     // TODO: Same TODO as above.
+    u32 ipaddr = ntohl(__nxlink_host.s_addr);
+    u32 system_version=0;
 
     char datadir[PATH_MAX];
     s32 depth=3;
@@ -403,12 +458,11 @@ int main(int argc, char* argv[])
 
     TRACE_PRINT(log_file, "nssu-updater %s\n", VERSION)
 
-    if (!configassocWrite("/config/nx-hbmenu/fileassoc/nssu-updater.cfg", "/switch/nssu-updater/nssu-updater.nro", ".nssu-update"))
+    if (R_SUCCEEDED(rc) && !configassocWrite("/config/nx-hbmenu/fileassoc/nssu-updater.cfg", "/switch/nssu-updater/nssu-updater.nro", ".nssu-update"))
         TRACE_PRINT(log_file, "Failed to write the hbmenu config.\n")
 
-    if (argc > 1) {
+    if (R_SUCCEEDED(rc) && argc > 1) {
         char *argptr = argv[1];
-        char *endarg = NULL;
         char *optarg = argptr;
         struct stat tmpstat;
 
@@ -432,14 +486,9 @@ int main(int argc, char* argv[])
             ipaddr = INADDR_LOOPBACK;
         }
 
-        errno = 0;
-        if (optarg[0] == 'v') optarg++;
-        system_version = strtoul(optarg, &endarg, 0);
-        if (endarg == optarg) errno = EINVAL;
-        if (errno != 0) {
-            system_version = 0;
+        rc = managerParseSystemVersion(optarg, &system_version);
+        if (R_FAILED(rc))
             TRACE_PRINT(log_file, "Invalid input arg for system-version.\n")
-        }
         else
             TRACE_PRINT(log_file, "Using system-version from arg: v%u\n", system_version)
 
@@ -463,11 +512,10 @@ int main(int argc, char* argv[])
             else keymask |= KEY_B;
         }
         else keymask |= KEY_MINUS|KEY_A|KEY_B;
-        if (sysver_flag && ipaddr) {
+        if (sysver_flag) {
             if (!manager_enabled) printf("Press X to Send the sysupdate.\n");
             else keymask |= KEY_X;
-            if (system_version) printf("Press Y to Receive the sysupdate.\n");
-            else keymask |= KEY_Y;
+            printf("Press Y to Receive the sysupdate.\n");
         }
         else keymask |= (KEY_X|KEY_Y);
         if (manager_enabled) {
@@ -498,6 +546,8 @@ int main(int argc, char* argv[])
             if (state==UpdateState_Initial && (kDown & keymask_allbuttons)) {
                 char *updatedesc = "";
                 char tmpstr[256];
+                char tmpoutstr[32];
+
                 if (kDown & KEY_MINUS) {
                     updatetype = UpdateType_Download;
                     updatedesc = "CDN, roughly equivalent to installing the latest sysupdate with System Settings";
@@ -528,12 +578,40 @@ int main(int argc, char* argv[])
                 if ((updatetype==UpdateType_Receive && !manager_enabled) || updatetype==UpdateType_Send || updatetype==UpdateType_Server) {
                     struct in_addr tmpaddr = {.s_addr = htonl(ipaddr)};
                     if (updatetype==UpdateType_Server) tmpaddr.s_addr = gethostid();
-                    TRACE_PRINT(log_file, "%s: %s\n", updatetype!=UpdateType_Server ? "Using remote IP address" : "Console (server) IP address", inet_ntoa(tmpaddr));
+
+                    if ((updatetype==UpdateType_Receive || updatetype==UpdateType_Send) && !ipaddr) {
+                        const char *msgstr = updatetype==UpdateType_Receive ? "Enter the server IPv4 address for Receive." : "Enter the client IPv4 address for Send.";
+
+                        memset(tmpoutstr, 0, sizeof(tmpoutstr));
+                        rc = managerShowKbd(log_file, true, msgstr, tmpoutstr, sizeof(tmpoutstr));
+
+                        if (R_SUCCEEDED(rc) && inet_pton(AF_INET, tmpoutstr, &tmpaddr)!=1) {
+                            TRACE_PRINT(log_file, "Bad IPv4 address.\n");
+                            rc = MAKERESULT(Module_Libnx, LibnxError_BadInput);
+                        }
+
+                        if (R_SUCCEEDED(rc)) ipaddr = ntohl(tmpaddr.s_addr);
+                    }
+
+                    if (R_SUCCEEDED(rc) && updatetype==UpdateType_Receive && !system_version) {
+                        memset(tmpoutstr, 0, sizeof(tmpoutstr));
+                        rc = managerShowKbd(log_file, false, "Enter the SystemUpdate Meta version for Receive.", tmpoutstr, sizeof(tmpoutstr));
+
+                        if (R_SUCCEEDED(rc)) {
+                            rc = managerParseSystemVersion(tmpoutstr, &system_version);
+                            if (R_FAILED(rc))
+                                TRACE_PRINT(log_file, "Invalid system-version.\n")
+                            else
+                                TRACE_PRINT(log_file, "Using system-version: v%u\n", system_version)
+                        }
+                    }
+
+                    if (R_SUCCEEDED(rc)) TRACE_PRINT(log_file, "%s: %s\n", updatetype!=UpdateType_Server ? "Using remote IP address" : "Console (server) IP address", inet_ntoa(tmpaddr));
                 }
 
-                TRACE(log_file, "You selected update-type: %s.\n", updatedesc);
+                if (R_SUCCEEDED(rc)) TRACE(log_file, "You selected update-type: %s.\n", updatedesc);
 
-                printf(    CONSOLE_ESC(31;1m) /* Set color to red */
+                if (R_SUCCEEDED(rc)) printf(    CONSOLE_ESC(31;1m) /* Set color to red */
                 "You selected update-type:\n%s.\n"
                 "%s"
                 "Do not continue if the console is low on battery,\nunless the console is charging.\n"
@@ -542,7 +620,7 @@ int main(int argc, char* argv[])
                 CONSOLE_ESC(0m) /* revert attributes*/
                 , updatedesc, updatetype!=UpdateType_Send ? "Backup your nandimage if you haven't already done so prior to running this.\nBricking may occur if the input sysupdate is corrupted.\n" : "");
 
-                state = UpdateState_Confirm;
+                if (R_SUCCEEDED(rc)) state = UpdateState_Confirm;
             }
             else if (state==UpdateState_Confirm && (kHeld == (KEY_A|KEY_B|KEY_X|KEY_Y|KEY_DUP))) {
                 if (updatetype==UpdateType_Download || updatetype==UpdateType_Card || updatetype==UpdateType_CardViaSystemUpdater || updatetype==UpdateType_Receive) {
