@@ -22,6 +22,8 @@ When used, the datadir is scanned recursively with a maximum depth of 3. Content
 
 The Send/Receive update-types require an IPv4 address (with Receive this only applies when version+datadir wasn't specified via arg). When launched with nxlink the address from nxlink is used, otherwise the software-keyboard applet will be shown for entering the address. This applet will also be shown for entering the version with Receive, if not specified via the arg.
 
+The Send/Receive update-types use [contents-delivery](https://switchbrew.org/wiki/NIM_services#Contents_Delivery). Receive connects to a server to install the sysupdate, while Send starts a server for sending the currently-installed sysupdate to a client. Send is unusable while connected to a normal wifi network due to a check done by nim, use server-mode instead. The server-mode update-type is a reimplementation of Send using [contents-delivery-manager](https://github.com/switchbrew/contents-delivery-manager), with the source sysupdate being the above specified datadir. When a datadir is specified with Receive, it will connect to a [server](https://github.com/switchbrew/contents-delivery-manager) running locally to install the sysupdate from the datadir, otherwise it will connect to the remote [server](https://github.com/switchbrew/contents-delivery-manager) with the above IP address (the remote server can also be another system running server-mode).
+
 A log is stored in the current-working-directory as `nssu-updater.log`, with releases this is located at `/switch/nssu-updater/nssu-updater.log`. Check this log when issues occur. For error-codes, see [switchbrew](https://switchbrew.org/wiki/Error_codes).
 
 ### Download
