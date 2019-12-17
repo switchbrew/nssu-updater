@@ -10,7 +10,17 @@ When the app is started a menu is displayed for selecting what update-type to us
   * [4.0.0+] Button 'B': [nssuControlSetupCardUpdateViaSystemUpdater](https://switchbrew.org/wiki/NS_Services#SetupCardUpdateViaSystemUpdater). This requires HostIO, and DebugMode must be enabled.
 * [4.0.0+] Button 'X', when system-version and datadir wasn't specified via arg: Send.
 * [4.0.0+] Button 'Y': Receive.
-* Button DPad-Down, when system-version and datadir was specified via arg: Server-mode.
+* Button DPad-Down, when system-version and datadir were specified via arg: Server-mode.
+
+This app can be launched with an optional arg: `[v]{version}` or `{datadir}/[v]{version}.nssu-update`. The former is intended for nxlink (however the latter can be used with nxlink too if wanted), while the latter is intended for hbmenu [file-associations](https://switchbrew.org/wiki/Homebrew_Menu#File_Associations). The file-association config is automatically created during app startup. The previously mentioned version is for the SystemUpdate Meta (0100000000000816), see [ninupdates](https://yls8.mtheall.com/ninupdates/reports.php).
+
+Example [nxlink](https://switchbrew.org/wiki/Homebrew_Menu) command: `nxlink nssu-updater.nro [v]{version}`.
+
+The datadir is the directory containing the sysupdate content data which will be used for local installation (update-type Receive), or with server-mode for sending to another system. The above `.nssu-update` file is located in this directory, multiple `.nssu-update` files can exist in the same directory if wanted. The content of these files doesn't matter, it can be empty. This file is selected by [navigating](https://switchbrew.org/wiki/Homebrew_Menu) to it with hbmenu.
+
+When used, the datadir is scanned recursively with a maximum depth of 3. Content filenames must be one of the following: `*{hex ContentId}`, `{hex ContentId}.nca`, or `{hex ContentId}.cnmt.nca`. Meta content must have filenames `ncatype0_*{hex ContentId}` (where `*` is ignored), or `{hex ContentId}.cnmt.nca`. During Meta loading with datadir-scanning the Meta content is temporarily "installed" into PlaceHolder content, this is deleted immediately after it's done using the content.
+
+The Send/Receive update-types require an IPv4 address (with Receive this only applies when version+datadir wasn't specified via arg). When launched with nxlink the address from nxlink is used, otherwise the software-keyboard applet will be shown for entering the address. This applet will also be shown for entering the version with Receive, if not specified via the arg.
 
 A log is stored in the current-working-directory as `nssu-updater.log`, with releases this is located at `/switch/nssu-updater/nssu-updater.log`. Check this log when issues occur. For error-codes, see [switchbrew](https://switchbrew.org/wiki/Error_codes).
 
