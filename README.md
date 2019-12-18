@@ -14,7 +14,7 @@ When the app is started a menu is displayed for selecting what update-type to us
 
 This app can be launched with an optional arg: `[v]{version}` or `{datadir}/[v]{version}[remaining non-numeric characters are ignored].nssu-update`. The former is intended for nxlink (however the latter can be used with nxlink too if wanted), while the latter is intended for hbmenu [file-associations](https://switchbrew.org/wiki/Homebrew_Menu#File_Associations). The file-association config is automatically created during app startup. The previously mentioned version is for the SystemUpdate Meta (0100000000000816), see [ninupdates](https://yls8.mtheall.com/ninupdates/reports.php).
 
-Example [nxlink](https://switchbrew.org/wiki/Homebrew_Menu) command: `nxlink nssu-updater.nro [v]{version}`.
+Example [nxlink](https://switchbrew.org/wiki/Homebrew_Menu) command: `nxlink -p nssu-updater/nssu-updater.nro nssu-updater.nro [v]{version}`.
 
 The [datadir](https://github.com/switchbrew/contents-delivery-manager) is the directory containing the sysupdate content data which will be used for local installation (update-type Receive), or with server-mode for sending to another system. The above `.nssu-update` file is located in this directory, multiple `.nssu-update` files can exist in the same directory if wanted. The content of these files doesn't matter, it can be empty. This file is selected by [navigating](https://switchbrew.org/wiki/Homebrew_Menu) to it with hbmenu.
 
