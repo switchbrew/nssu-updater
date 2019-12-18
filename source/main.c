@@ -760,12 +760,6 @@ int main(int argc, char* argv[])
                             rc = asyncResultGet(&asyncres);
                             TRACE_PRINT(log_file, "asyncResultGet(): 0x%x\n", rc)
                             consoleUpdate(NULL);
-
-                            if (R_SUCCEEDED(rc)) {
-                                printf("asyncResultClose...\n");
-                                consoleUpdate(NULL);
-                                asyncResultClose(&asyncres);
-                            }
                         }
                     }
 
