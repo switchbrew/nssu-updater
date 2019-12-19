@@ -12,7 +12,7 @@ When the app is started a menu is displayed for selecting what update-type to us
 * [4.0.0+] Button 'Y': Receive.
 * Button DPad-Down, when system-version and datadir were specified via arg: Server-mode.
 
-This app can be launched with an optional arg: `[v]{version}` or `{datadir}/[v]{version}[remaining non-numeric characters are ignored].nssu-update`. The former is intended for nxlink (however the latter can be used with nxlink too if wanted), while the latter is intended for hbmenu [file-associations](https://switchbrew.org/wiki/Homebrew_Menu#File_Associations). The file-association config is automatically created during app startup. The previously mentioned version is for the SystemUpdate Meta (0100000000000816), see [ninupdates](https://yls8.mtheall.com/ninupdates/reports.php).
+This app can be launched with an optional arg: `[v]{version}` or `{datadir}/[v]{version}[remaining non-numeric characters are ignored].nssu-update`. The former is intended for nxlink (however the latter can be used with nxlink too if wanted), while the latter is intended for hbmenu [file-associations](https://switchbrew.org/wiki/Homebrew_Menu#File_Associations). The `.nssu-update` from the filename is only for hbmenu file-associations, the nssu-updater app itself ignores that. The file-association config is automatically created during app startup. The previously mentioned version is for the SystemUpdate Meta (0100000000000816), see [ninupdates](https://yls8.mtheall.com/ninupdates/reports.php).
 
 Example [nxlink](https://switchbrew.org/wiki/Homebrew_Menu) command: `nxlink -p nssu-updater/nssu-updater.nro nssu-updater.nro [v]{version}`.
 
