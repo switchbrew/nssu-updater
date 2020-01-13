@@ -839,6 +839,11 @@ int main(int argc, char* argv[])
         rc = appletRequestToReboot();
         printf("appletRequestToReboot(): 0x%x\n", rc);
         consoleUpdate(NULL);
+        if (R_FAILED(rc)) {
+            printf("Reboot failed. appletRequestToReboot() is only available when running under an Application with [3.0.0+].\nOnce this app exits in 5s, use the system power-menu to reboot.\n");
+            consoleUpdate(NULL);
+            sleep(5);
+        }
     }
 
     // Deinitialize and clean up resources used by the console (important!)
