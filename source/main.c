@@ -75,7 +75,7 @@ Result managerHandlerMetaLoad(void* userdata, struct DeliveryContentEntry *entry
             rc = ncmContentStorageWritePlaceHolder(storage, &placeholder_id, 0, tmpbuf, entry->filesize);
             if (R_SUCCEEDED(rc)) rc = ncmContentStorageGetPlaceHolderPath(storage, tmpstr, sizeof(tmpstr), &placeholder_id);
 
-            if (R_SUCCEEDED(rc)) rc = fsOpenFileSystemWithId(&tmpfs, 0, FsFileSystemType_ContentMeta, tmpstr);
+            if (R_SUCCEEDED(rc)) rc = fsOpenFileSystemWithId(&tmpfs, 0, FsFileSystemType_ContentMeta, tmpstr, FsContentAttributes_None);
 
             if (R_SUCCEEDED(rc)) {
                 if (fsdevMountDevice("meta", tmpfs)==-1) rc = MAKERESULT(Module_Libnx, LibnxError_IoError);
@@ -421,7 +421,7 @@ int main(int argc, char* argv[])
     bool sleepflag=0;
     bool sysver_flag = hosversionAtLeast(4,0,0);
     UpdateType updatetype=UpdateType_None;
-    u64 keymask=0, keymask_allbuttons=(KEY_MINUS|KEY_A|KEY_B|KEY_X|KEY_Y|KEY_DDOWN);
+    u64 keymask=0, keymask_allbuttons=(HidNpadButton_Minus|HidNpadButton_A|HidNpadButton_B|HidNpadButton_X|HidNpadButton_Y|HidNpadButton_Down);
 
     FILE *log_file = NULL;
     NsSystemUpdateControl sucontrol={0};
@@ -445,6 +445,13 @@ int main(int argc, char* argv[])
     socketInitializeDefault();
 
     consoleInit(NULL);
+
+    // Configure our supported input layout: a single player with standard controller styles
+    padConfigureInput(1, HidNpadStyleSet_NpadStandard);
+
+    // Initialize the default gamepad (which reads handheld mode inputs as well as the first connected controller)
+    PadState pad;
+    padInitializeDefault(&pad);
 
     memset(datadir, 0, sizeof(datadir));
 
@@ -509,19 +516,19 @@ int main(int argc, char* argv[])
             printf("Press - to install update downloaded from CDN.\n");
             printf("Press A to install update with nssuControlSetupCardUpdate.\n");
             if (sysver_flag) printf("Press B to install update with nssuControlSetupCardUpdateViaSystemUpdater.\n");
-            else keymask |= KEY_B;
+            else keymask |= HidNpadButton_B;
         }
-        else keymask |= KEY_MINUS|KEY_A|KEY_B;
+        else keymask |= HidNpadButton_Minus|HidNpadButton_A|HidNpadButton_B;
         if (sysver_flag) {
             if (!manager_enabled) printf("Press X to Send the sysupdate.\n");
-            else keymask |= KEY_X;
+            else keymask |= HidNpadButton_X;
             printf("Press Y to Receive the sysupdate.\n");
         }
-        else keymask |= (KEY_X|KEY_Y);
+        else keymask |= (HidNpadButton_X|HidNpadButton_Y);
         if (manager_enabled) {
             printf("Press DPad-Down for server-mode.\n");
         }
-        else keymask |= KEY_DDOWN;
+        else keymask |= HidNpadButton_Down;
     }
 
     printf("Press + exit, aborting the operation prior to applying the update.\n");
@@ -531,15 +538,15 @@ int main(int argc, char* argv[])
     // Main loop
     while (appletMainLoop())
     {
-        // Scan all the inputs. This should be done once for each frame
-        hidScanInput();
+        // Scan the gamepad. This should be done once for each frame
+        padUpdate(&pad);
 
-        // hidKeysDown returns information about which buttons have been
-        // just pressed in this frame compared to the previous one
-        u64 kDown = hidKeysDown(CONTROLLER_P1_AUTO) & ~keymask;
-        u64 kHeld = hidKeysHeld(CONTROLLER_P1_AUTO);
+        // padGetButtonsDown returns the set of buttons that have been
+        // newly pressed in this frame compared to the previous one
+        u64 kDown = padGetButtonsDown(&pad);
+        u64 kHeld = padGetButtons(&pad);
 
-        if (kDown & KEY_PLUS)
+        if (kDown & HidNpadButton_Plus)
             break; // break in order to return to hbmenu
 
         if (R_SUCCEEDED(rc)) {
@@ -548,29 +555,29 @@ int main(int argc, char* argv[])
                 char tmpstr[256];
                 char tmpoutstr[32];
 
-                if (kDown & KEY_MINUS) {
+                if (kDown & HidNpadButton_Minus) {
                     updatetype = UpdateType_Download;
                     updatedesc = "CDN, roughly equivalent to installing the latest sysupdate with System Settings";
                 }
-                else if (kDown & KEY_A) {
+                else if (kDown & HidNpadButton_A) {
                     updatetype = UpdateType_Card;
                     updatedesc = "Gamecard";
                 }
-                else if (kDown & KEY_B) {
+                else if (kDown & HidNpadButton_B) {
                     updatetype = UpdateType_CardViaSystemUpdater;
                     updatedesc = "CardViaSystemUpdater";
                 }
-                else if (kDown & KEY_X) {
+                else if (kDown & HidNpadButton_X) {
                     updatetype = UpdateType_Send;
                     updatedesc = "Send";
                 }
-                else if (kDown & KEY_Y) {
+                else if (kDown & HidNpadButton_Y) {
                     updatetype = UpdateType_Receive;
                     memset(tmpstr, 0, sizeof(tmpstr));
                     snprintf(tmpstr, sizeof(tmpstr)-1, "Receive, %s", manager_enabled ? "sysupdate will be installed with the above local datadir + version" : "sysupdate will be installed with the above remote IP addr + version");
                     updatedesc = tmpstr;
                 }
-                else if (kDown & KEY_DDOWN) {
+                else if (kDown & HidNpadButton_Down) {
                     updatetype = UpdateType_Server;
                     updatedesc = "Server, sysupdate from the above datadir will be sent to a client\nover the network";
                 }
@@ -622,7 +629,7 @@ int main(int argc, char* argv[])
 
                 if (R_SUCCEEDED(rc)) state = UpdateState_Confirm;
             }
-            else if (state==UpdateState_Confirm && (kHeld == (KEY_A|KEY_B|KEY_X|KEY_Y|KEY_DUP))) {
+            else if (state==UpdateState_Confirm && (kHeld == (HidNpadButton_A|HidNpadButton_B|HidNpadButton_X|HidNpadButton_Y|HidNpadButton_Up))) {
                 if (updatetype==UpdateType_Download || updatetype==UpdateType_Card || updatetype==UpdateType_CardViaSystemUpdater || updatetype==UpdateType_Receive) {
                     rc = nssuOpenSystemUpdateControl(&sucontrol);
                     TRACE_PRINT(log_file, "nssuOpenSystemUpdateControl(): 0x%x\n", rc)
@@ -678,7 +685,7 @@ int main(int argc, char* argv[])
                             TRACE_PRINT(log_file, "sukeyLocate(): 0x%x\n", rc)
 
                             if (R_SUCCEEDED(rc)) {
-                                deliveryinfo.data.system_update_meta_version = system_version;
+                                deliveryinfo.data.system_update_version = system_version;
                                 sukeySignSystemDeliveryInfo(sysdeliveryinfo_key, &deliveryinfo);
                             }
                             memset(sysdeliveryinfo_key, 0, sizeof(sysdeliveryinfo_key));
